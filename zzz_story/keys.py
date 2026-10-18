@@ -20,6 +20,7 @@ class ParsedKey:
 
 _LINE_RE = re.compile(r"^(\d+)(?:_(\d+))?([MF])?$")
 _NAME_RE = re.compile(r"^(?:Name|name)(?:_?(\d+))?([MF])?$")
+_OPTION_RE = re.compile(r"^Option(\d+)_(\d+)([MF])?$", re.IGNORECASE)
 
 
 def _parse_suffix(suffix: str) -> tuple[str, int | None, int | None, str | None]:
@@ -39,6 +40,9 @@ def _parse_suffix(suffix: str) -> tuple[str, int | None, int | None, str | None]
     match = _LINE_RE.match(suffix)
     if match:
         return ("line", int(match.group(1)), int(match.group(2)) if match.group(2) else None, match.group(3))
+    match = _OPTION_RE.match(suffix)
+    if match:
+        return ("line", int(match.group(2)), int(match.group(1)), match.group(3))
     return ("other", None, None, None)
 
 
@@ -97,7 +101,15 @@ def parse_key(key: str) -> ParsedKey | None:
         return ParsedKey(key, "Comic", "", key[len("Comic_"):], "line", 0, None, None)
 
     if key.startswith("CS_"):
-        return ParsedKey(key, "CS", "CS", key, "line", 0, None, None)
+        parts = key[3:].split("_")
+        if len(parts) >= 3:
+            ch_raw, sc, ln_raw = parts[0], parts[1], parts[2]
+        elif len(parts) == 2:
+            ch_raw, sc, ln_raw = parts[0], parts[1], "0"
+        else:
+            ch_raw, sc, ln_raw = "Other", key, "0"
+        line_no = int(re.sub(r"\D", "", ln_raw) or "0")
+        return ParsedKey(key, "CS", ch_raw, sc, "line", line_no, None, None)
 
     return None
 

@@ -74,6 +74,15 @@ def avatar_links_from_cab(cab: bytes):
         index += 1
 
 
+def option_keys_from_cab(cab: bytes):
+    """Yield dialogue option text keys serialized in transition lists."""
+    values = utf16_ascii_strings(cab)
+    limit = len(values) - 1
+    for index in range(limit):
+        if values[index] == "textKey" and DIALOGUE_KEY_RE.match(values[index + 1]):
+            yield values[index + 1]
+
+
 @dataclass
 class ScanStats:
     blocks: int = 0
@@ -84,13 +93,15 @@ class ScanStats:
     text_ids: int = 0
     avatar_links: int = 0
     avatar_values: int = 0
+    option_keys: int = 0
 
 
 def scan_perform_blocks(
     block_paths: list[Path],
-) -> tuple[dict[str, set[str]], dict[str, str], ScanStats]:
+) -> tuple[dict[str, set[str]], dict[str, str], set[str], ScanStats]:
     source_to_text: dict[str, set[str]] = {}
     avatar_to_text: dict[str, str] = {}
+    option_keys: set[str] = set()
     ambiguous_avatar: set[str] = set()
     stats = ScanStats()
     for number, path in enumerate(block_paths, 1):
@@ -116,8 +127,12 @@ def scan_perform_blocks(
                     stats.avatar_values += 1
                 elif previous != avatar_name:
                     ambiguous_avatar.add(text_id)
+            for opt_key in option_keys_from_cab(cab):
+                if opt_key not in option_keys:
+                    option_keys.add(opt_key)
+                    stats.option_keys += 1
     for text_id in ambiguous_avatar:
         avatar_to_text.pop(text_id, None)
     stats.sources = len(source_to_text)
     stats.text_ids = len({text_id for values in source_to_text.values() for text_id in values})
-    return source_to_text, avatar_to_text, stats
+    return source_to_text, avatar_to_text, option_keys, stats

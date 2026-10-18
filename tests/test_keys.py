@@ -50,3 +50,20 @@ def test_numeric_mainchat():
 
 def test_store_npc_ignored():
     assert parse_key("MainChat_StoreNPC_HIA_01_01") is None
+
+
+def test_cs_key_parsing():
+    parsed = parse_key("CS_00_01_010")
+    assert parsed is not None
+    assert parsed.family == "CS"
+    assert parsed.chapter_token == "00"
+    assert parsed.scene == "01"
+    assert parsed.line_no == 10
+
+    parsed_char = parse_key("CS_Burnice_02_030")
+    assert parsed_char is not None
+    assert parsed_char.family == "CS"
+    assert parsed_char.chapter_token == "Burnice"
+    assert parsed_char.scene == "02"
+    assert parsed_char.line_no == 30
+

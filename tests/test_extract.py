@@ -14,10 +14,16 @@ def test_extract_fixture(tmp_path, monkeypatch):
     text_map = {
         "Main_GalGame_Chapter00_10000002_001": "你好",
         "Main_GalGame_Chapter00_10000002_002": "再见",
+        "Main_GalGame_Chapter00_10000002_Option1_03": "选项分支一",
+        "Main_GalGame_Chapter00_10000002_Option2_04": "选项分支二",
         "Main_GalGame_Chapter00_10000002_Name_001": "苏茜",
         "MainChat_Chapter01_001_01": "聊天内容",
         "Comic_abcdef": "漫画内容",
         "Title_10000002": "「测试场景」",
+        "CS_00_01_010": "过场台词一",
+        "CS_00_01_020": "过场台词一",
+        "CS_00_01_030": "哥哥，可以开始吗？",
+        "CS_00_01_040": "妹妹，可以开始吗？",
     }
     _write(data / "TextMap/TextMapTemplateTb.json", text_map)
     _write(data / "TextMap/TextMapOverwriteTemplateTb.json", {})
@@ -46,24 +52,37 @@ def test_extract_fixture(tmp_path, monkeypatch):
         include_supplement=True,
         formats="jsonl,txt",
     )
-    assert stats.total_lines == 3
-    assert stats.supplement_lines == 1
+    assert stats.total_lines == 5
+    assert stats.options_count == 2
+    assert stats.supplement_lines == 3
 
     records = [
         json.loads(line)
         for line in (out / "story.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert len(records) == 3
+    assert len(records) == 5
     galgame = [record for record in records if record["family"] == "GalGame"]
-    assert len(galgame) == 2
+    assert len(galgame) == 4
     assert galgame[0]["scene_speakers"] == ["苏茜"]
     assert galgame[0]["speaker"] is None
     assert galgame[0]["scene_act"] == 1
     assert galgame[0]["scene_title"] == "测试场景"
     story_txt = (out / "story.txt").read_text(encoding="utf-8")
     assert "## 第 1 幕：测试场景（出场：苏茜）" in story_txt
+    assert "> 选项 1：选项分支一" in story_txt
+    assert "> 选项 2：选项分支二" in story_txt
+
     assert (out / "supplement.jsonl").exists()
+    supp_txt = (out / "supplement.txt").read_text(encoding="utf-8")
+    assert "### 序章" in supp_txt
+    assert "#### 过场 01" in supp_txt
+    assert "过场台词一" in supp_txt
+    assert "哥哥，可以开始吗？" in supp_txt
+    assert "妹妹，可以开始吗？" not in supp_txt  # deduplicated
+
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["source_version"] == "3.2.0"
     coverage = json.loads((out / "coverage.json").read_text(encoding="utf-8"))
-    assert coverage["total_lines"] == 3
+    assert coverage["total_lines"] == 5
+    assert coverage["options_count"] == 2
+

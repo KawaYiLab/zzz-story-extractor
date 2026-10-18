@@ -26,6 +26,8 @@ def write_jsonl(records: Iterable[dict], path: Path) -> int:
 
 
 def _record_line(record: dict) -> str:
+    if record.get("line_type") == "option":
+        return f"> 选项：{record.get('text', '')}"
     speaker = record.get("speaker")
     text = record.get("text", "")
     if speaker:
@@ -83,10 +85,24 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
 
     current_chapter = None
     current_scene = None
+    opt_buffer: list[dict] = []
+
+    def flush_options() -> None:
+        if not opt_buffer:
+            return
+        chunks.append("")
+        if len(opt_buffer) == 1:
+            chunks.append(f"> 选项：{opt_buffer[0].get('text', '')}")
+        else:
+            for idx, opt in enumerate(opt_buffer, 1):
+                chunks.append(f"> 选项 {idx}：{opt.get('text', '')}")
+        chunks.append("")
+        opt_buffer.clear()
 
     for record in records:
         chapter = record.get("chapter")
         if chapter != current_chapter:
+            flush_options()
             current_chapter = chapter
             current_scene = None
             label = record.get("chapter_label") or chapter
@@ -95,6 +111,7 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
             chunks.append("")
         scene_key = (record.get("family"), record.get("scene"))
         if scene_key != current_scene:
+            flush_options()
             current_scene = scene_key
             ch = record.get("chapter") or ""
             sc = record.get("scene") or ""
@@ -107,9 +124,17 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
             chunks.append("")
             chunks.append(f"## 第 {act_num} 幕{title_str}{cast_str}")
             chunks.append("")
-        chunks.append(_record_line(record))
 
-    text = "\n".join(chunks).strip() + "\n"
+        if record.get("line_type") == "option":
+            opt_buffer.append(record)
+        else:
+            flush_options()
+            chunks.append(_record_line(record))
+
+    flush_options()
+
+    raw_text = "\n".join(chunks).strip() + "\n"
+    text = re.sub(r"\n{3,}", "\n\n", raw_text)
     _atomic_write_text(path, text)
 
 
@@ -142,17 +167,43 @@ def write_chapter_files(records: list[dict], directory: Path) -> list[Path]:
 
 
 def write_supplement_txt(records: list[dict], path: Path) -> None:
-    chunks: list[str] = ["# 补充文本（Comic / CS）", ""]
+    chunks: list[str] = ["# 绝区零补充文本（过场动画 CS / 动态漫画 Comic）", ""]
     current_family = None
+    current_chapter = None
+    current_scene = None
     for record in records:
         family = record.get("family")
         if family != current_family:
             current_family = family
+            current_chapter = None
+            current_scene = None
             chunks.append("")
-            chunks.append(f"## {family}")
+            fam_title = "过场动画（CS）" if family == "CS" else ("动态漫画（Comic）" if family == "Comic" else family)
+            chunks.append(f"## {fam_title}")
             chunks.append("")
+
+        if family == "CS":
+            chapter = record.get("chapter")
+            if chapter != current_chapter:
+                current_chapter = chapter
+                current_scene = None
+                label = record.get("chapter_label") or chapter
+                chunks.append("")
+                chunks.append(f"### {label}")
+                chunks.append("")
+
+            scene = record.get("scene")
+            if scene != current_scene:
+                current_scene = scene
+                chunks.append("")
+                chunks.append(f"#### 过场 {scene}")
+                chunks.append("")
+
         chunks.append(record.get("text", ""))
-    _atomic_write_text(path, "\n".join(chunks).strip() + "\n")
+
+    raw_text = "\n".join(chunks).strip() + "\n"
+    text = re.sub(r"\n{3,}", "\n\n", raw_text)
+    _atomic_write_text(path, text)
 
 
 def write_json(path: Path, payload: dict) -> None:

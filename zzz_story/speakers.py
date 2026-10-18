@@ -13,7 +13,7 @@ from .fetch import read_json
 from .perform import scan_perform_blocks
 from .textmap import load_language_map
 
-CACHE_VERSION = 4
+CACHE_VERSION = 5
 
 _ALIAS_IN_BANKS = re.compile(r"(?:^|\|)BK_([A-Za-z0-9]+)")
 _ALIAS_IN_PATH = re.compile(r"(?:^|/)VO_([A-Za-z0-9]+)(?:/|$)")
@@ -266,11 +266,12 @@ def build_speaker_index(
                 text_id: SpeakerInfo(**info)
                 for text_id, info in payload.get("speakers", {}).items()
             }
+            options = set(payload.get("options", []))
             for key, value in payload.get("stats", {}).items():
                 if hasattr(stats, key):
                     setattr(stats, key, value)
-            print(f"Loaded speaker cache: {len(speakers)} text ids")
-            return _index_from_speakers(speakers, text_keys, stats), stats
+            print(f"Loaded speaker cache: {len(speakers)} text ids, {len(options)} options")
+            return _index_from_speakers(speakers, text_keys, stats, options), stats
         except Exception as exc:  # noqa: BLE001 - rebuild on corrupt cache
             print(f"Speaker cache unreadable, rebuilding: {exc}")
 
@@ -315,7 +316,7 @@ def build_speaker_index(
         print("warning: no Perform blocks found; continuing without per-line speakers")
         return SpeakerIndex({}, stats), stats
 
-    source_to_text, avatar_to_text, scan_stats = scan_perform_blocks(block_paths)
+    source_to_text, avatar_to_text, option_keys, scan_stats = scan_perform_blocks(block_paths)
     stats.links = scan_stats.links
     stats.sources = scan_stats.sources
     stats.blocks = scan_stats.blocks
@@ -323,7 +324,8 @@ def build_speaker_index(
     stats.avatar_values = scan_stats.avatar_values
     print(
         f"Scan complete: {scan_stats.links} voice links, {scan_stats.sources} sources, "
-        f"{scan_stats.avatar_links} avatar links, {scan_stats.avatar_values} text ids with avatar"
+        f"{scan_stats.avatar_links} avatar links, {scan_stats.avatar_values} text ids with avatar, "
+        f"{len(option_keys)} options"
     )
 
     text_to_infos: dict[str, list[tuple[str | None, str | None, str]]] = {}
@@ -370,17 +372,19 @@ def build_speaker_index(
         "version": CACHE_VERSION,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "speakers": {key: asdict(value) for key, value in speakers.items()},
+        "options": sorted(option_keys),
         "stats": asdict(stats),
     }
     cache_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     print(f"Cached speaker map: {cache_path}")
-    return _index_from_speakers(speakers, text_keys, stats), stats
+    return _index_from_speakers(speakers, text_keys, stats, option_keys), stats
 
 
 def _index_from_speakers(
     speakers: dict[str, SpeakerInfo],
     text_keys: set[str],
     stats: SpeakerStats,
+    options: set[str] | None = None,
 ) -> "SpeakerIndex":
     normalized = _normalized_key_index(text_keys)
     key_info: dict[str, SpeakerInfo] = {}
@@ -402,16 +406,28 @@ def _index_from_speakers(
         ):
             key_info[key] = info
     stats.mapped_keys = len(key_info)
-    return SpeakerIndex(key_info, stats)
+    return SpeakerIndex(key_info, stats, options)
 
 
 class SpeakerIndex:
-    def __init__(self, key_info: dict[str, SpeakerInfo], stats: SpeakerStats):
+    def __init__(
+        self,
+        key_info: dict[str, SpeakerInfo],
+        stats: SpeakerStats,
+        options: set[str] | None = None,
+    ):
         self._key_info = key_info
         self.stats = stats
+        self._options = options or set()
+        self._canonical_options = {canonical_text_id(k) for k in self._options}
 
     def lookup(self, key: str) -> SpeakerInfo | None:
         return self._key_info.get(key)
+
+    def is_option(self, key: str) -> bool:
+        if key in self._options:
+            return True
+        return canonical_text_id(key) in self._canonical_options
 
     def __len__(self) -> int:
         return len(self._key_info)

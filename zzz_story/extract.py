@@ -82,6 +82,7 @@ class ExtractStats:
     scene_fallback: int = 0
     scene_alias: int = 0
     speaker_null: int = 0
+    options_count: int = 0
     deduped: int = 0
     branch_filtered: int = 0
     gender_pair_filtered: int = 0
@@ -89,6 +90,35 @@ class ExtractStats:
     by_chapter: dict[str, int] = field(default_factory=dict)
     supplement_lines: int = 0
     speaker_stats: dict = field(default_factory=dict)
+
+
+CS_CHAPTER_MAP: dict[str, tuple[str, str, int]] = {
+    "00": ("Chapter00", "序章", 0),
+    "01": ("Chapter01", "第一季 第一章", 1),
+    "01.5": ("Chapter015", "第一季 第一章间章", 2),
+    "02": ("Chapter02", "第一季 第二章", 3),
+    "02.5": ("Chapter025", "第一季 第二章间章", 4),
+    "028": ("Chapter028", "第一季 第二章", 5),
+    "03": ("Chapter03", "第一季 第三章", 6),
+    "03.5": ("Chapter035", "第一季 第三章间章", 7),
+    "04": ("Chapter04", "第一季 第四章", 8),
+    "04.5": ("Chapter045", "第一季 第四章间章", 9),
+    "05": ("Chapter05", "第一季 第五章", 10),
+    "05.2": ("Chapter052", "第一季 第五章", 11),
+    "05.5": ("Chapter055", "第一季 第五章间章", 12),
+    "05.8": ("Chapter058", "第一季 第五章", 13),
+    "21": ("Chapter210", "第二季 第一章 云霞同归处", 21),
+    "22": ("Chapter220", "第二季 第二章 迟吟的浪涌", 22),
+    "23": ("Chapter230", "第二季 第三章 不要温和地走入那良夜", 23),
+    "24": ("Chapter240", "第二季 第四章 可曾记得梦", 24),
+    "25": ("Chapter250", "第二季 第五章 将临未抵的深渊", 25),
+    "Burnice": ("Story_Burnice", "角色过场 · 柏妮思", 100),
+    "Lighter": ("Story_Lighter", "角色过场 · 莱特", 101),
+    "Lycaon": ("Story_Lycaon", "角色过场 · 莱卡恩", 102),
+    "Nekomiya": ("Story_Nekomiya", "角色过场 · 猫又", 103),
+    "QingYi": ("Story_QingYi", "角色过场 · 青衣", 104),
+    "Rina": ("Story_Rina", "角色过场 · 丽娜", 105),
+}
 
 
 def _load_scene_titles(data_paths: dict[str, Path], text_map: TextMap) -> dict[str, str]:
@@ -309,12 +339,25 @@ def extract(
             cleaned = clean_text(raw, "F" if protagonist == "BOTH" else protagonist)
             if not cleaned.text:
                 continue
+            if parsed.family == "CS":
+                ch_info = CS_CHAPTER_MAP.get(parsed.chapter_token)
+                if ch_info:
+                    ch_token, ch_label, ch_order = ch_info
+                else:
+                    ch_token = f"CS_{parsed.chapter_token}"
+                    ch_label = f"过场动画（{parsed.chapter_token}）"
+                    ch_order = 900
+            else:
+                ch_token = "Comic"
+                ch_label = "动态漫画"
+                ch_order = 999
             supplement.append(
                 {
                     "family": parsed.family,
                     "source_key": key,
-                    "chapter": "补充",
-                    "chapter_label": "补充文本",
+                    "chapter": ch_token,
+                    "chapter_label": ch_label,
+                    "chapter_order": ch_order,
                     "scene": parsed.scene,
                     "line_no": parsed.line_no or 0,
                     "text": cleaned.text,
@@ -375,6 +418,28 @@ def extract(
             if speaker:
                 stats.voice_speaker += 1
 
+        is_opt = False
+        if not speaker or speaker in PLAYER_NAMES:
+            if source_key in speaker_index._options:
+                is_opt = True
+            elif speaker_index.is_option(source_key):
+                is_opt = True
+            elif alias and alias_name_map.get(alias) in {"选项", "玩家选项"}:
+                is_opt = True
+            elif "_Option" in source_key or "_Opt" in source_key:
+                is_opt = True
+
+        if is_opt:
+            line_type = "option"
+            speaker = None
+            stats.options_count += 1
+        elif speaker:
+            line_type = "dialogue"
+        elif has_voice:
+            line_type = "unknown"
+        else:
+            line_type = "narration"
+
         info_chapter = chapter_info(chapter)
         display_speakers = [name for name in scene_names if name not in NAME_IGNORE]
         record = {
@@ -397,7 +462,7 @@ def extract(
             "raw_text": pending_record["_raw"],
             "text_variants": pending_record["_variants"],
             "source_key": source_key,
-            "line_type": "dialogue" if speaker else ("unknown" if has_voice else "narration"),
+            "line_type": line_type,
             "scene_speakers": display_speakers,
             "order": 0,
         }
@@ -448,8 +513,52 @@ def extract(
         stats.by_family[record["family"]] = stats.by_family.get(record["family"], 0) + 1
         stats.by_chapter[record["chapter_label"]] = stats.by_chapter.get(record["chapter_label"], 0) + 1
 
-    supplement.sort(key=lambda item: (item["family"], item["source_key"]))
+    supplement.sort(
+        key=lambda item: (
+            0 if item["family"] == "CS" else 1,
+            item.get("chapter_order", 999),
+            item["chapter"],
+            natural_scene_key(item["scene"]),
+            item["line_no"],
+            item["source_key"],
+        )
+    )
+    if dedupe:
+        kept_supp: list[dict] = []
+        for rec in supplement:
+            if kept_supp:
+                prev = kept_supp[-1]
+                if (
+                    prev["family"] == rec["family"]
+                    and prev["chapter"] == rec["chapter"]
+                    and prev["scene"] == rec["scene"]
+                    and prev["text"] == rec["text"]
+                ):
+                    continue
+                if (
+                    prev["family"] == rec["family"]
+                    and prev["chapter"] == rec["chapter"]
+                    and prev["scene"] == rec["scene"]
+                ):
+                    p_txt = prev["text"]
+                    c_txt = rec["text"]
+                    if protagonist == "F":
+                        if "哥哥" in p_txt and "妹妹" in c_txt:
+                            continue
+                        if "妹妹" in p_txt and "哥哥" in c_txt:
+                            kept_supp[-1] = rec
+                            continue
+                    elif protagonist == "M":
+                        if "妹妹" in p_txt and "哥哥" in c_txt:
+                            continue
+                        if "哥哥" in p_txt and "妹妹" in c_txt:
+                            kept_supp[-1] = rec
+                            continue
+            kept_supp.append(rec)
+        supplement = kept_supp
+
     _assign_supplement_ids(supplement)
+    stats.supplement_lines = len(supplement)
 
     formats_set = {part.strip().lower() for part in formats.split(",") if part.strip()}
     if "jsonl" in formats_set:
@@ -476,6 +585,7 @@ def extract(
         "total_lines": stats.total_lines,
         "speaker_lines": stats.speaker_lines,
         "speaker_null": stats.speaker_null,
+        "options_count": stats.options_count,
         "voice_linked": stats.voice_linked,
         "voice_speaker": stats.voice_speaker,
         "voice_speaker_coverage": round(stats.voice_speaker / stats.voice_linked, 4) if stats.voice_linked else None,
