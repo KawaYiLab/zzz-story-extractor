@@ -57,6 +57,17 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
         chunks.append("---")
         chunks.append("")
 
+    scene_cast_map: dict[tuple, list[str]] = {}
+    for record in records:
+        key = (record.get("chapter"), record.get("family"), record.get("scene"))
+        cast = scene_cast_map.setdefault(key, [])
+        for spk in (record.get("scene_speakers") or []):
+            if spk and spk not in cast and spk != "未标注":
+                cast.append(spk)
+        spk = record.get("speaker")
+        if spk and spk not in cast and spk != "未标注":
+            cast.append(spk)
+
     current_chapter = None
     current_scene = None
 
@@ -72,10 +83,13 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
         scene_key = (record.get("family"), record.get("scene"))
         if scene_key != current_scene:
             current_scene = scene_key
-            speakers = record.get("scene_speakers") or []
-            cast = "、".join(speakers) if speakers else "未标注"
+            key = (record.get("chapter"), record.get("family"), record.get("scene"))
+            cast = scene_cast_map.get(key, [])
             chunks.append("")
-            chunks.append(f"## 场景 {record.get('scene')}（出场：{cast}）")
+            if cast:
+                chunks.append(f"## 场景 {record.get('scene')}（出场：{'、'.join(cast)}）")
+            else:
+                chunks.append(f"## 场景 {record.get('scene')}")
             chunks.append("")
         chunks.append(_record_line(record))
 

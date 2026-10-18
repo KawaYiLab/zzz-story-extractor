@@ -316,9 +316,9 @@ def extract(
                 speaker_source = "scene_alias"
                 stats.scene_alias += 1
 
-        if not speaker and info and info.alias:
+        if not speaker:
             candidates = [name for name in scene_names if name not in NAME_IGNORE and name not in PLAYER_NAMES]
-            if len(candidates) == 1:
+            if len(candidates) == 1 and (has_voice or (info and info.source == "avatar")):
                 speaker = candidates[0]
                 confidence = 0.4
                 speaker_source = "scene_name"

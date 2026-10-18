@@ -13,7 +13,7 @@ from .fetch import read_json
 from .perform import scan_perform_blocks
 from .textmap import load_language_map
 
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 
 _ALIAS_IN_BANKS = re.compile(r"(?:^|\|)BK_([A-Za-z0-9]+)")
 _ALIAS_IN_PATH = re.compile(r"(?:^|/)VO_([A-Za-z0-9]+)(?:/|$)")
@@ -32,6 +32,7 @@ _NAME_KEYS = (
     "_Name",
     "Message_NPC",
     "Message_MultiMessage_Name",
+    "GalNPC",
 )
 _GENERIC_NAMES = {
     "黑色", "白色", "红色", "蓝色", "绿色", "黄色", "紫色", "灰色", "选项", "旁白",
@@ -49,6 +50,15 @@ _MANUAL_ALIASES = {
     "lindveinskin01": "林德薇恩",
     "lindvein": "林德薇恩",
     "generallorenz": "「少将」洛伦兹",
+    "victima": "遇害者A",
+    "victimb": "遇害者B",
+    "victimc": "遇害者C",
+    "victimd": "遇害者D",
+    "victime": "遇害者E",
+    "saraswhispercroon": "莎拉",
+    "youkai": "幻祟",
+    "scaredcorporateexecutive": "惊恐的高管",
+    "mother": "母亲",
 }
 
 _ALIAS_PREFIXES = (
@@ -121,6 +131,16 @@ def load_alias_map(text_map, en_map: dict[str, str], avatar_payload) -> dict[str
         if len(normalized) < 2 or normalized.isdigit():
             continue
         aliases.setdefault(normalized, chinese)
+
+    # GalNPC keys in TextMap directly map character alias to Chinese display name:
+    # e.g. GalNPCParo -> 帕罗, GalNPCMianzai -> 绵仔, GalNPCFeebleman -> 虚弱的男人.
+    for key in text_map.keys():
+        if key.startswith("GalNPC"):
+            display = text_map.get(key)
+            if display and _CJK.search(display) and len(display) <= 24 and display not in _GENERIC_NAMES:
+                alias = normalize_name(key[6:])
+                if alias and len(alias) >= 2:
+                    aliases.setdefault(alias, display)
 
     for alias, display in _MANUAL_ALIASES.items():
         aliases.setdefault(alias, display)
