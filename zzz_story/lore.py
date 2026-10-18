@@ -12,11 +12,66 @@ from typing import Any
 from .clean import clean_text
 from .textmap import TextMap
 
-# Map internal char tags in GalGame/Date events to avatar codes / names
-CHAR_TAG_ALIASES: dict[str, str] = {
+# Early CBT1 avatar mapping for Birthday and Stature (01..09)
+EARLY_AVATAR_ATTR_MAP: dict[str, str] = {
+    "1011": "01",  # 安比 Anby (02/20, 156)
+    "1021": "02",  # 猫又 Nekomata (07/30, 148)
+    "1031": "03",  # 妮可 Nicole (11/11, 165)
+    "1081": "04",  # 比利 Billy (11/25, 188)
+    "1101": "05",  # 珂蕾妲 Koleda (08/10, 150)
+    "1121": "06",  # 本 Ben (12/23, 192)
+    "1181": "07",  # 格莉丝 Grace (04/14, 170)
+    "1111": "08",  # 安东 Anton (05/02, 190)
+    "1041": "09",  # 11号 Soldier 11 (3/21, 160)
+}
+
+# Variant avatar fallback to base version
+VARIANT_INHERIT_MAP: dict[str, str] = {
+    "1381": "1011",  # 零号·安比 -> 安比
+    "1531": "1081",  # 星徽·比利 -> 比利
+    "1502": "1501",  # 爱芮 -> 爱芮
+    "1582": "1581",  # 蕾米埃尔 -> 蕾米埃尔
+    "2041": "1431",  # 叶瞬光 -> 叶瞬光
+    "2071": "1491",  # 千夏 -> 千夏
+    "2131": "1611",  # 克拉蕾 -> 克拉蕾
+    "2141": "1621",  # 洛克茜 -> 洛克茜
+}
+
+# Aliases for Mindscape Cinema Talent Prefix
+TALENT_PREFIX_ALIASES: dict[str, str] = {
+    "nicole": "Nostradamus",
+    "koleda": "OokumaMari",
+    "soukaku": "Aokaku",
+    "piper": "Clara",
+    "grace": "Lisa",
+    "nekomata": "Tsubaki",
+    "tsubaki": "Tsubaki",
+    "miyabi": "Unagi",
+    "unagi": "Unagi",
+    "no11": "Longinus",
+    "longinus": "Longinus",
+    "spbilly": "SPBilly",
+    "silveranby": "SilverAnby",
+    "orpheus": "Brujas",
+    "roxy": "Pryce",
+    "zhao": "XiaoZhao",
+    "xiaozhao": "XiaoZhao",
+    "hugovlad": "HugoVlad",
+    "janedoe": "JaneDoe",
+    "qingyi": "QingYi",
+    "banyue": "BanYue",
+    "panyinhu": "PanYinhu",
+    "yeshunguang": "Zhenzhen",
+    "zhenzhen": "Zhenzhen",
+    "yixuan": "YiXuan",
+}
+
+# Map internal char tags in GalGame / Date / Chat / Bubble events to avatar IDs
+DIALOGUE_TAG_ALIASES: dict[str, str] = {
     "partnerno11": "1041",
     "partnernroma": "1571",
     "partnerorpheus": "1301",
+    "orpheus": "1301",
     "partnerroxy": "1621",
     "partnersoukaku": "1131",
     "partnersunna": "1171",
@@ -51,6 +106,8 @@ CHAR_TAG_ALIASES: dict[str, str] = {
     "partneralice": "1401",
     "partnerpanyinhu": "1421",
     "partneryixuan": "1371",
+    "anbi": "1011",
+    "nico": "1031",
 }
 
 
@@ -105,38 +162,69 @@ def _extract_agents(
 
     playable: list[dict[str, Any]] = []
     seen_names: set[str] = set()
+    tag_to_aid: dict[str, str] = dict(DIALOGUE_TAG_ALIASES)
+
     for e in raw_entries:
         name_key = e.get("HAKHHHCAENA") or ""
         name = tm.get(name_key)
+        aid = str(e.get("PFOAJKNPCHL", 0))
+        code = str(e.get("FEKFJBFGANO") or "").lower()
+        if code:
+            tag_to_aid[code] = aid
+            tag_to_aid[f"partner{code}"] = aid
         if name and name not in seen_names:
             seen_names.add(name)
             playable.append(e)
 
-    # Collect GalGame hangout stories by char tag
+    # Collect dialogue streams
     gal_events: dict[str, dict[str, list[tuple[str, str]]]] = defaultdict(lambda: defaultdict(list))
+    chat_events: dict[str, dict[str, list[tuple[str, str]]]] = defaultdict(lambda: defaultdict(list))
+    bubble_events: dict[str, dict[str, list[tuple[str, str]]]] = defaultdict(lambda: defaultdict(list))
+
     for k, v in tm.items():
         if k.startswith("PartnerTalk_GalGame_"):
             parts = k.split("_")
             if len(parts) >= 5:
-                tag = parts[2].lower()
-                eid = parts[3]
-                lid = parts[4]
-                gal_events[tag][eid].append((lid, _clean(v)))
+                aid = tag_to_aid.get(parts[2].lower())
+                if aid:
+                    gal_events[aid][parts[3]].append((parts[4], _clean(v)))
+        elif k.startswith("PartnerTalk_BubbleStory_"):
+            parts = k.split("_")
+            if len(parts) >= 4:
+                aid = tag_to_aid.get(parts[2].lower())
+                if aid:
+                    lid = parts[4] if len(parts) >= 5 else "01"
+                    bubble_events[aid][parts[3]].append((lid, _clean(v)))
+        elif k.startswith("PartnerTalk_Chat_Partner"):
+            parts = k.split("_")
+            if len(parts) >= 4:
+                aid = tag_to_aid.get(parts[2].lower())
+                if aid:
+                    lid = parts[4] if len(parts) >= 5 else "01"
+                    chat_events[aid][parts[3]].append((lid, _clean(v)))
+        elif k.startswith("PartnerTalk_Chat_33"):
+            m = re.match(r"PartnerTalk_Chat_33(\d{3})(\d+)_(\d+)", k)
+            if m:
+                aid = str(1000 + int(m.group(1)) * 10 + 1)
+                eid = m.group(1) + m.group(2)
+                chat_events[aid][eid].append((m.group(3), _clean(v)))
+        elif k.startswith("Chat_PartnerTalk_"):
+            parts = k.split("_")
+            if len(parts) >= 4:
+                aid = tag_to_aid.get(parts[2].lower())
+                if aid:
+                    eid = parts[3]
+                    lid = parts[-1]
+                    chat_events[aid][eid].append((lid, _clean(v)))
 
-    # Collect Mindscape Cinema stories (Talent_..._Desc_02)
-    talent_stories: dict[str, list[str]] = defaultdict(list)
-    for k, v in tm.items():
-        if "Talent_" in k and k.endswith("_Desc_02"):
-            # e.g. Alice_Talent_01_Desc_02
-            char_prefix = k.split("_")[0].lower()
-            text = _clean(v)
-            if text and len(text) > 10:
-                talent_stories[char_prefix].append(text)
+    # Identify all Mindscape Cinema prefixes
+    all_talent_prefixes: set[str] = set()
+    for k in tm.keys():
+        if "_Talent_01_Title" in k:
+            all_talent_prefixes.add(k.split("_Talent_01_Title")[0])
 
-    # Group avatars by Camp
     camp_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     agent_count = 0
-
     avatar_info_list: list[dict[str, Any]] = []
 
     for a in playable:
@@ -149,10 +237,45 @@ def _extract_agents(
         )
         code = str(a.get("FEKFJBFGANO") or "")
 
+        # Birthday & Stature with early and variant fallback
         birthday = _clean(tm.get(f"Partner_Birthday_{aid}", ""))
         stature = _clean(tm.get(f"Partner_Stature_{aid}", ""))
-        race = _clean(tm.get(f"Partner_Race_{aid}", ""))
+
+        if not birthday or not stature:
+            early_idx = EARLY_AVATAR_ATTR_MAP.get(aid)
+            if early_idx:
+                if not birthday:
+                    birthday = _clean(tm.get(f"Partner_Birthday_{early_idx}", ""))
+                if not stature:
+                    stature = _clean(tm.get(f"Partner_Stature_{early_idx}", ""))
+
+        if not birthday or not stature:
+            base_aid = VARIANT_INHERIT_MAP.get(aid)
+            if base_aid:
+                if not birthday:
+                    birthday = _clean(tm.get(f"Partner_Birthday_{base_aid}", ""))
+                if not stature:
+                    stature = _clean(tm.get(f"Partner_Stature_{base_aid}", ""))
+
+        if stature and stature.isdigit():
+            stature = f"{stature} cm"
+
         feature_desc = _clean(tm.get(f"Item_Avatar_{aid}_Des", ""))
+
+        # HIA Investigation License & Ether Aptitude
+        outlook_desc = _clean(tm.get(f"Partner_OutlookDesc_{aid}", ""))
+        aptitude = "待协会测定"
+        if outlook_desc:
+            if "优秀的以太适性" in outlook_desc:
+                aptitude = "优秀"
+            elif "良好的以太适性" in outlook_desc:
+                aptitude = "良好"
+            elif "以太适性为保密" in outlook_desc or "保密" in outlook_desc:
+                aptitude = "保密"
+            elif "尚未得到具体信息" in outlook_desc:
+                aptitude = "待协会测定"
+            else:
+                aptitude = "已留档"
 
         # Profile entries (Partner_ProfileDesc_{aid}, _1, _2...)
         profiles: list[str] = []
@@ -164,36 +287,69 @@ def _extract_agents(
             if p_sub:
                 profiles.append(p_sub)
 
-        # Impressions
-        impression = _clean(tm.get(f"Partner_Impression_{aid}", ""))
+        # Impressions (Wise & Belle sibling dual-view)
+        impression_wise = _clean(tm.get(f"Partner_Impression_m_{aid}", ""))
+        impression_belle = _clean(tm.get(f"Partner_Impression_f_{aid}", ""))
+        impression_gen = _clean(tm.get(f"Partner_Impression_{aid}", ""))
 
-        # W-Engine
-        w_engine_names: list[str] = []
+        # Signature W-Engines
+        w_engines: list[dict[str, str]] = []
         for rank in ("S", "A", "B"):
             w_name = _clean(tm.get(f"Item_Weapon_{rank}_{aid}_Name", ""))
             if w_name:
-                w_engine_names.append(f"{w_name} ({rank}级)")
+                w_short = _clean(tm.get(f"Item_Weapon_{rank}_{aid}_ShortDesc", ""))
+                w_desc = _clean(tm.get(f"Item_Weapon_{rank}_{aid}_Desc", ""))
+                w_engines.append({
+                    "name": f"{w_name} ({rank}级)",
+                    "short_desc": w_short,
+                    "desc": w_desc,
+                })
 
-        # Hangout stories
-        hangouts: list[dict[str, Any]] = []
-        char_tags = [code.lower(), f"partner{code.lower()}"]
-        for tag, mapped_aid in CHAR_TAG_ALIASES.items():
-            if mapped_aid == aid:
-                char_tags.append(tag)
+        # Mindscape Cinema 6 Acts
+        talent_prefix = TALENT_PREFIX_ALIASES.get(code.lower())
+        if not talent_prefix:
+            for p in all_talent_prefixes:
+                if p.lower() == code.lower():
+                    talent_prefix = p
+                    break
 
-        matched_eids: set[str] = set()
-        for tag in char_tags:
-            if tag in gal_events:
-                for eid, lines in gal_events[tag].items():
-                    if eid in matched_eids:
-                        continue
-                    matched_eids.add(eid)
-                    title = _clean(tm.get(f"Title_{eid}", f"专属邀约 {eid}"))
-                    sorted_lines = [text for _, text in sorted(lines, key=lambda x: x[0])]
-                    hangouts.append({"title": title, "lines": sorted_lines})
+        cinema_acts: list[dict[str, Any]] = []
+        if talent_prefix:
+            for act in range(1, 7):
+                title = _clean(tm.get(f"{talent_prefix}_Talent_{act:02d}_Title", ""))
+                story = _clean(tm.get(f"{talent_prefix}_Talent_{act:02d}_Desc_02", ""))
+                buff = _clean(tm.get(f"{talent_prefix}_Talent_{act:02d}_Desc_01", ""))
+                if title or story:
+                    if not buff or buff == "PlaceHolder":
+                        buff = "[技能等级强化] 普通攻击、闪避、支援技、特殊技、连携技技能等级提升。"
+                    cinema_acts.append({
+                        "act": act,
+                        "title": title or f"第{act}幕",
+                        "story": story,
+                        "buff": buff,
+                    })
 
-        # Mindscape stories
-        cinema_poems = talent_stories.get(code.lower(), [])
+        # Hangout / GalGame events
+        agent_gals: list[dict[str, Any]] = []
+        if aid in gal_events:
+            for eid in sorted(gal_events[aid].keys()):
+                title = _clean(tm.get(f"Title_{eid}", f"专属邀约 {eid}"))
+                sorted_lines = [text for _, text in sorted(gal_events[aid][eid], key=lambda x: x[0])]
+                agent_gals.append({"eid": eid, "title": title, "lines": sorted_lines})
+
+        # Street chat encounters
+        agent_chats: list[dict[str, Any]] = []
+        if aid in chat_events:
+            for eid in sorted(chat_events[aid].keys()):
+                sorted_lines = [text for _, text in sorted(chat_events[aid][eid], key=lambda x: x[0])]
+                agent_chats.append({"eid": eid, "lines": sorted_lines})
+
+        # Street bubble interactions
+        agent_bubbles: list[dict[str, Any]] = []
+        if aid in bubble_events:
+            for eid in sorted(bubble_events[aid].keys()):
+                sorted_lines = [text for _, text in sorted(bubble_events[aid][eid], key=lambda x: x[0])]
+                agent_bubbles.append({"eid": eid, "lines": sorted_lines})
 
         info = {
             "id": aid,
@@ -203,13 +359,18 @@ def _extract_agents(
             "code": code,
             "birthday": birthday,
             "stature": stature,
-            "race": race,
+            "aptitude": aptitude,
+            "outlook_desc": outlook_desc,
             "feature_desc": feature_desc,
             "profiles": profiles,
-            "impression": impression,
-            "w_engines": w_engine_names,
-            "hangouts": hangouts,
-            "cinema_poems": cinema_poems,
+            "impression_wise": impression_wise,
+            "impression_belle": impression_belle,
+            "impression_gen": impression_gen,
+            "w_engines": w_engines,
+            "cinema_acts": cinema_acts,
+            "gals": agent_gals,
+            "chats": agent_chats,
+            "bubbles": agent_bubbles,
         }
         avatar_info_list.append(info)
         camp_groups[camp_name].append(info)
@@ -235,7 +396,6 @@ def _extract_agents(
         "外务筹策局": "11_达识结社与空巡局.md",
     }
 
-    # Group by target filename
     files_to_camps: dict[str, list[str]] = defaultdict(list)
     for camp_name in camp_groups:
         fname = camp_file_map.get(camp_name, "12_漫游者与特别存在.md")
@@ -250,56 +410,105 @@ def _extract_agents(
                 md_lines.append(f"### {ag['name']}（{ag['full_name']}）\n")
                 md_lines.append("| 属性 | 档案记录 |")
                 md_lines.append("| :--- | :--- |")
-                md_lines.append(f"| **代理人ID** | `{ag['id']}` (`{ag['code']}`) |")
+                md_lines.append(f"| **代理人ID / 代号** | `{ag['id']}` (`{ag['code']}`) |")
                 md_lines.append(f"| **所属阵营** | {ag['camp']} |")
                 if ag["birthday"]:
                     md_lines.append(f"| **生日** | {ag['birthday']} |")
-                if ag["race"]:
-                    md_lines.append(f"| **种族** | {ag['race']} |")
                 if ag["stature"]:
-                    md_lines.append(f"| **身高/体型** | {ag['stature']} |")
+                    md_lines.append(f"| **身高 / 体型** | {ag['stature']} |")
+                md_lines.append(f"| **以太适性评级** | {ag['aptitude']} |")
                 if ag["w_engines"]:
-                    md_lines.append(f"| **专属/推荐音擎** | {', '.join(ag['w_engines'])} |")
+                    w_names = [w["name"] for w in ag["w_engines"]]
+                    md_lines.append(f"| **专属 / 推荐音擎** | {', '.join(w_names)} |")
                 md_lines.append("")
 
                 if ag["feature_desc"]:
                     md_lines.append(f"> **特写记录**：\n> {ag['feature_desc'].replace(chr(10), chr(10) + '> ')}\n")
 
+                if ag["outlook_desc"]:
+                    md_lines.append("#### 空洞调查协会（HIA）执照与以太适性档案\n")
+                    md_lines.append(f"> {ag['outlook_desc'].replace(chr(10), chr(10) + '> ')}\n")
+
                 if ag["profiles"]:
                     md_lines.append("#### 深度身世与机密档案\n")
                     for i, prof in enumerate(ag["profiles"], 1):
-                        md_lines.append(f"**档案记录 0{i}**：\n\n{prof}\n")
+                        label = f"档案记录 0{i}" if i == 1 else f"档案记录 0{i}（进阶调查）"
+                        md_lines.append(f"**{label}**：\n\n{prof}\n")
 
-                if ag["impression"]:
-                    md_lines.append("#### 同伴评语与印象\n")
-                    md_lines.append(f"> {ag['impression'].replace(chr(10), chr(10) + '> ')}\n")
+                if ag["impression_wise"] or ag["impression_belle"] or ag["impression_gen"]:
+                    md_lines.append("#### 录像店私密评语（绳匠视点）\n")
+                    if ag["impression_wise"]:
+                        md_lines.append(f"- 🎬 **兄长·哲的观察随笔**：\n  > {ag['impression_wise'].replace(chr(10), chr(10) + '  > ')}\n")
+                    if ag["impression_belle"]:
+                        md_lines.append(f"- 📼 **胞妹·铃的私密手记**：\n  > {ag['impression_belle'].replace(chr(10), chr(10) + '  > ')}\n")
+                    if ag["impression_gen"] and not ag["impression_wise"] and not ag["impression_belle"]:
+                        md_lines.append(f"> {ag['impression_gen'].replace(chr(10), chr(10) + '> ')}\n")
 
-                if ag["cinema_poems"]:
-                    md_lines.append("#### 意象影画风味篇章\n")
-                    for i, poem in enumerate(ag["cinema_poems"], 1):
-                        md_lines.append(f"**影画第 {i} 幕**：\n```text\n{poem}\n```\n")
+                if ag["cinema_acts"]:
+                    md_lines.append(f"#### 意象影画·心象世界（共 {len(ag['cinema_acts'])} 幕）\n")
+                    for act_info in ag["cinema_acts"]:
+                        md_lines.append(f"##### 第 {act_info['act']} 幕：{act_info['title']}\n")
+                        if act_info["story"]:
+                            md_lines.append(f"> **影画寄语**：\n> {act_info['story'].replace(chr(10), chr(10) + '> ')}\n")
+                        if act_info["buff"]:
+                            md_lines.append(f"- **核心机制**：{act_info['buff']}\n")
 
-                if ag["hangouts"]:
-                    md_lines.append(f"#### 专属信赖邀约与日常剧情（共 {len(ag['hangouts'])} 幕）\n")
-                    for h in ag["hangouts"]:
-                        md_lines.append(f"##### {h['title']}\n")
-                        for line in h["lines"]:
+                if ag["w_engines"]:
+                    md_lines.append("#### 专属音擎与题记物语\n")
+                    for w in ag["w_engines"]:
+                        md_lines.append(f"##### {w['name']}\n")
+                        if w["short_desc"]:
+                            md_lines.append(f"> **题记**：{w['short_desc']}\n")
+                        if w["desc"]:
+                            md_lines.append(f"{w['desc']}\n")
+
+                if ag["gals"]:
+                    md_lines.append(f"#### 专属信赖邀约（GalGame事件，共 {len(ag['gals'])} 幕）\n")
+                    for g in ag["gals"]:
+                        md_lines.append(f"##### {g['title']}\n")
+                        for line in g["lines"]:
                             md_lines.append(f"- {line}")
                         md_lines.append("")
+
+                if ag["chats"]:
+                    md_lines.append(f"#### 街区偶遇与日常对话（共 {len(ag['chats'])} 幕）\n")
+                    for c in ag["chats"]:
+                        md_lines.append(f"##### 街区日常 {c['eid']}\n")
+                        for line in c["lines"]:
+                            md_lines.append(f"- {line}")
+                        md_lines.append("")
+
+                if ag["bubbles"]:
+                    md_lines.append(f"#### 随行气泡与特别对话（共 {len(ag['bubbles'])} 组）\n")
+                    for b in ag["bubbles"]:
+                        md_lines.append(f"##### 街区气泡 {b['eid']}\n")
+                        for line in b["lines"]:
+                            md_lines.append(f"- {line}")
+                        md_lines.append("")
+
                 md_lines.append("---\n")
 
         (agents_dir / fname).write_text("\n".join(md_lines), encoding="utf-8")
 
     # Write Overview Table
     ov_lines = ["# 新艾利都代理人全景总览\n"]
-    ov_lines.append("| ID | 姓名 | 全名 | 阵营 | 生日 | 种族 | 体型 | 专属音擎 | 档案/邀约 |")
-    ov_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+    ov_lines.append("| ID | 姓名 | 全名 | 所属阵营 | 生日 | 身高/体型 | 以太适性 | 专属音擎 | 意象影画 | 信赖/日常互动 |")
+    ov_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
     for ag in sorted(avatar_info_list, key=lambda x: int(x["id"]) if x["id"].isdigit() else 9999):
-        w_str = ag["w_engines"][0] if ag["w_engines"] else "-"
-        hang_count = f"{len(ag['hangouts'])} 幕" if ag["hangouts"] else "-"
+        w_str = ag["w_engines"][0]["name"] if ag["w_engines"] else "-"
+        cinema_str = f"{len(ag['cinema_acts'])}幕全" if ag["cinema_acts"] else "-"
+        interaction_parts = []
+        if ag["gals"]:
+            interaction_parts.append(f"邀约 {len(ag['gals'])}幕")
+        if ag["chats"]:
+            interaction_parts.append(f"街区 {len(ag['chats'])}幕")
+        if ag["bubbles"]:
+            interaction_parts.append(f"气泡 {len(ag['bubbles'])}组")
+        inter_str = " / ".join(interaction_parts) if interaction_parts else "-"
+
         ov_lines.append(
             f"| `{ag['id']}` | **{ag['name']}** | {ag['full_name']} | {ag['camp']} | "
-            f"{ag['birthday'] or '-'} | {ag['race'] or '-'} | {ag['stature'] or '-'} | {w_str} | {hang_count} |"
+            f"{ag['birthday'] or '-'} | {ag['stature'] or '-'} | {ag['aptitude']} | {w_str} | {cinema_str} | {inter_str} |"
         )
     (agents_dir / "00_代理人全景总览.md").write_text("\n".join(ov_lines), encoding="utf-8")
 

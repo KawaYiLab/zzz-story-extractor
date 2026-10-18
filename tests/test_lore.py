@@ -15,9 +15,15 @@ def test_extract_lore(tmp_path):
         "Partner_Race_1011": "人族",
         "Partner_Stature_1011": "162cm",
         "Item_Avatar_1011_Des": "特写照片...",
+        "Partner_OutlookDesc_1011": "空洞调查员-安比，具有良好的以太适性。",
         "Partner_ProfileDesc_1011": "档案记录01...",
         "Partner_ProfileDesc_1011_1": "档案记录02...",
-        "Partner_Impression_1011": "伙伴评价...",
+        "Partner_Impression_m_1011": "说实话，我最好奇的是安比的歌单。",
+        "Partner_Impression_f_1011": "安比经常来录像店借影片呢。",
+        "Anbi_Talent_01_Title": "快充模式",
+        "Anbi_Talent_01_Desc_02": "快充一分钟，战斗半小时！",
+        "Anbi_Talent_01_Desc_01": "能量获得效率提升12%",
+        "Chat_PartnerTalk_Anbi_0_1": "汉堡是最好吃的食物。",
         "Item_Weapon_A_1011_Name": "德玛拉电池Ⅱ型",
         "Item_Weapon_A_1011_Desc": "音擎构造详情...",
         "Item_Weapon_A_1011_SpecialDesc": "以电为名的剑...",
@@ -102,5 +108,11 @@ def test_extract_lore(tmp_path):
     agent_doc = (out_dir / "lore" / "agents" / "01_狡兔屋.md").read_text(encoding="utf-8")
     assert "安比（安比·德玛拉）" in agent_doc
     assert "狡兔屋" in agent_doc
-    assert "档案记录01" in agent_doc
+    assert "良好" in agent_doc
+    assert "空洞调查协会（HIA）执照与以太适性档案" in agent_doc
+    assert "档案记录 01" in agent_doc
+    assert "兄长·哲的观察随笔" in agent_doc
+    assert "胞妹·铃的私密手记" in agent_doc
+    assert "快充模式" in agent_doc
     assert "德玛拉电池Ⅱ型" in agent_doc
+    assert "汉堡是最好吃的食物。" in agent_doc
