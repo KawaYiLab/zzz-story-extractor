@@ -8,7 +8,6 @@ from pathlib import Path
 
 from . import __version__
 from .catalog import Catalog, find_catalog_block, map_story_assets, story_asset_paths
-from .db import build_database
 from .extract import extract
 from .fetch import (
     DEFAULT_VERSION,
@@ -17,7 +16,6 @@ from .fetch import (
     read_game_version,
     read_json,
 )
-from .mcp_server import run_mcp
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -45,39 +43,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     extract_parser.add_argument("--limit", type=int, default=None, help="only process the first N line keys (debug)")
 
-    build_db = sub.add_parser("build-db", help="build the SQLite index used by the MCP server")
-    build_db.add_argument(
-        "--jsonl",
-        type=Path,
-        default=Path("out/zzz_story_3.2.0_chs/story.jsonl"),
-        help="main story JSONL",
-    )
-    build_db.add_argument(
-        "--supplement",
-        type=Path,
-        default=Path("out/zzz_story_3.2.0_chs/supplement.jsonl"),
-        help="optional supplement JSONL",
-    )
-    build_db.add_argument("--no-supplement", action="store_true")
-    build_db.add_argument(
-        "--db",
-        type=Path,
-        default=Path("out/zzz_story_3.2.0_chs/story.sqlite"),
-        help="SQLite output",
-    )
-
-    mcp_parser = sub.add_parser("mcp", help="run the read-only story MCP server")
-    mcp_parser.add_argument(
-        "--db",
-        type=Path,
-        default=Path("out/zzz_story_3.2.0_chs/story.sqlite"),
-        help="SQLite index",
-    )
-    mcp_parser.add_argument("--transport", choices=["stdio", "streamable-http", "sse"], default="stdio")
-    mcp_parser.add_argument("--host", default="127.0.0.1")
-    mcp_parser.add_argument("--port", type=int, default=8765)
-    mcp_parser.add_argument("--path", default="/mcp")
-
     doctor = sub.add_parser("doctor", help="check data, game and dependencies")
     doctor.add_argument("--data-dir", type=Path, default=None)
     doctor.add_argument("--game-dir", type=Path, default=None)
@@ -89,7 +54,7 @@ def _doctor(args: argparse.Namespace) -> int:
     print(f"zzz-story {__version__}")
     ok = True
 
-    for module in ("requests", "ooz", "xxhash", "cryptography", "mcp"):
+    for module in ("requests", "ooz", "xxhash", "cryptography"):
         try:
             __import__(module)
             print(f"  dependency {module}: ok")
@@ -131,38 +96,12 @@ def _doctor(args: argparse.Namespace) -> int:
     return 0 if ok else 2
 
 
-def _build_db(args: argparse.Namespace) -> int:
-    supplement = None if args.no_supplement else args.supplement
-    stats = build_database(args.jsonl, args.db, supplement)
-    print(f"database: {args.db}")
-    print(f"  documents: {stats.documents}")
-    print(f"  scenes: {stats.scenes}")
-    print(f"  lines: {stats.lines}")
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "doctor":
         return _doctor(args)
-    if args.command == "build-db":
-        return _build_db(args)
-    if args.command == "mcp":
-        try:
-            run_mcp(
-                db_path=args.db,
-                transport=args.transport,
-                host=args.host,
-                port=args.port,
-                path=args.path,
-            )
-        except FileNotFoundError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            print("run: zzz-story build-db", file=sys.stderr)
-            return 2
-        return 0
 
     out = args.out
     if out == Path("out"):
