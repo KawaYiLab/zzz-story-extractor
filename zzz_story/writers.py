@@ -1,0 +1,129 @@
+"""Output writers for JSONL, TXT and manifests."""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Iterable
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
+def write_jsonl(records: Iterable[dict], path: Path) -> int:
+    lines: list[str] = []
+    count = 0
+    for record in records:
+        lines.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+        count += 1
+    _atomic_write_text(path, "\n".join(lines) + ("\n" if lines else ""))
+    return count
+
+
+def _record_line(record: dict) -> str:
+    speaker = record.get("speaker")
+    text = record.get("text", "")
+    if speaker:
+        return f"【{speaker}】{text}"
+    if record.get("line_type") == "unknown":
+        return f"（未标注）{text}"
+    # Akasha-style presentation: narration is plain text, not a fake speaker.
+    return text
+
+
+def _chapters_in_order(records: list[dict]) -> list[tuple[str, str]]:
+    seen: dict[str, str] = {}
+    for record in records:
+        chapter = record.get("chapter") or "未分章"
+        seen.setdefault(chapter, record.get("chapter_label") or chapter)
+    return list(seen.items())
+
+
+def write_story_txt(records: list[dict], path: Path, include_index: bool = True) -> None:
+    chunks: list[str] = []
+    if include_index:
+        chunks.append("# 绝区零主线剧情")
+        chunks.append("")
+        chunks.append("章节：")
+        for chapter, label in _chapters_in_order(records):
+            count = sum(1 for record in records if record.get("chapter") == chapter)
+            chunks.append(f"- {label}（{chapter}，{count} 行）")
+        chunks.append("")
+        chunks.append("---")
+        chunks.append("")
+
+    current_chapter = None
+    current_scene = None
+
+    for record in records:
+        chapter = record.get("chapter")
+        if chapter != current_chapter:
+            current_chapter = chapter
+            current_scene = None
+            label = record.get("chapter_label") or chapter
+            chunks.append("")
+            chunks.append(f"# {label}（{chapter}）")
+            chunks.append("")
+        scene_key = (record.get("family"), record.get("scene"))
+        if scene_key != current_scene:
+            current_scene = scene_key
+            speakers = record.get("scene_speakers") or []
+            cast = "、".join(speakers) if speakers else "未标注"
+            chunks.append("")
+            chunks.append(f"## 场景 {record.get('scene')}（出场：{cast}）")
+            chunks.append("")
+        chunks.append(_record_line(record))
+
+    text = "\n".join(chunks).strip() + "\n"
+    _atomic_write_text(path, text)
+
+
+def _safe_filename(value: str, limit: int = 60) -> str:
+    value = re.sub(r'[\\/:*?"<>|\s]+', "_", value)
+    value = value.strip("._")
+    return (value or "chapter")[:limit]
+
+
+def write_chapter_files(records: list[dict], directory: Path) -> list[Path]:
+    """Write one Akasha-style document per chapter, plus an index."""
+    directory.mkdir(parents=True, exist_ok=True)
+    grouped: dict[str, list[dict]] = {}
+    for record in records:
+        grouped.setdefault(record.get("chapter") or "未分章", []).append(record)
+
+    written: list[Path] = []
+    index_lines = ["# 绝区零主线章节", ""]
+    for chapter, chapter_records in grouped.items():
+        label = chapter_records[0].get("chapter_label") or chapter
+        order = int(chapter_records[0].get("chapter_order") or 9999)
+        name = f"CH{order:02d}_{_safe_filename(chapter)}_{_safe_filename(label)}.txt"
+        path = directory / name
+        write_story_txt(chapter_records, path, include_index=False)
+        written.append(path)
+        index_lines.append(f"- [{label}]({name})（{chapter}，{len(chapter_records)} 行）")
+
+    _atomic_write_text(directory / "index.txt", "\n".join(index_lines).strip() + "\n")
+    return written
+
+
+def write_supplement_txt(records: list[dict], path: Path) -> None:
+    chunks: list[str] = ["# 补充文本（Comic / CS）", ""]
+    current_family = None
+    for record in records:
+        family = record.get("family")
+        if family != current_family:
+            current_family = family
+            chunks.append("")
+            chunks.append(f"## {family}")
+            chunks.append("")
+        chunks.append(record.get("text", ""))
+    _atomic_write_text(path, "\n".join(chunks).strip() + "\n")
+
+
+def write_json(path: Path, payload: dict) -> None:
+    _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")

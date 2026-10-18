@@ -1,0 +1,123 @@
+"""Scan Perform CAB assets for dialogueKey -> voice source links."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from .mhy1 import MhyError, extract_mhy_files
+
+SOURCE_RE = re.compile(
+    r"^(?:VO_[A-Za-z0-9_./-]+/)?"
+    r"(?:GalGame|Chat|Bubble|BubbleStory|ChatAudio|ChatPlus|BubbleNpc)_[A-Za-z0-9_-]+$",
+    re.IGNORECASE,
+)
+DIALOGUE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def utf16_ascii_strings(data: bytes) -> list[str]:
+    """Extract UTF-16LE strings of ASCII characters, as done by the reference parser."""
+    values: list[str] = []
+    offset = 0
+    length = len(data)
+    while offset + 7 < length:
+        start = offset
+        while offset + 1 < length and 0x20 <= data[offset] <= 0x7E and data[offset + 1] == 0:
+            offset += 2
+        if offset - start >= 8:
+            values.append(data[start:offset].decode("utf-16le", errors="replace"))
+        offset = offset if offset != start else offset + 1
+    return values
+
+
+def dialogue_links_from_cab(cab: bytes):
+    values = utf16_ascii_strings(cab)
+    index = 0
+    while index + 1 < len(values):
+        if values[index] != "dialogueKey" or not DIALOGUE_KEY_RE.match(values[index + 1]):
+            index += 1
+            continue
+        text_id = values[index + 1]
+        for cursor in range(index + 2, min(index + 12, len(values) - 1)):
+            if values[cursor] == "dialogueKey":
+                break
+            if values[cursor] not in ("externalVoiceKey", "voiceKey"):
+                continue
+            source = values[cursor + 1]
+            if SOURCE_RE.match(source):
+                yield source, text_id
+            break
+        index += 1
+
+
+def avatar_links_from_cab(cab: bytes):
+    """Yield ``(dialogueKey, avatarName)`` for nodes that carry a speaker.
+
+    Perform assets serialize a node's ``avatarName`` immediately before its
+    ``dialogueKey``.  The avatar value is usually a TextMap key
+    (``Avatar_...``, ``GalNPC...``, ``MainChat_..._Name01``), so it resolves to
+    a display name even when the line has no voice key.
+    """
+    values = utf16_ascii_strings(cab)
+    last_avatar: str | None = None
+    index = 0
+    while index + 1 < len(values):
+        value = values[index]
+        following = values[index + 1]
+        if value == "avatarName" and following and following not in ("nodeMark", "backgroundKey"):
+            last_avatar = following
+        elif value == "dialogueKey" and DIALOGUE_KEY_RE.match(following):
+            if last_avatar:
+                yield following, last_avatar
+                last_avatar = None
+        index += 1
+
+
+@dataclass
+class ScanStats:
+    blocks: int = 0
+    mhy_files: int = 0
+    cab_files: int = 0
+    links: int = 0
+    sources: int = 0
+    text_ids: int = 0
+    avatar_links: int = 0
+    avatar_values: int = 0
+
+
+def scan_perform_blocks(
+    block_paths: list[Path],
+) -> tuple[dict[str, set[str]], dict[str, str], ScanStats]:
+    source_to_text: dict[str, set[str]] = {}
+    avatar_to_text: dict[str, str] = {}
+    ambiguous_avatar: set[str] = set()
+    stats = ScanStats()
+    for number, path in enumerate(block_paths, 1):
+        stats.blocks += 1
+        print(f"  perform block {number}/{len(block_paths)}: {path.name} ({path.stat().st_size / 1e6:.1f} MB)")
+        block = path.read_bytes()
+        try:
+            files = extract_mhy_files(block)
+        except MhyError as exc:
+            print(f"    skipped: {exc}")
+            continue
+        stats.mhy_files += 1
+        for cab in files:
+            stats.cab_files += 1
+            for source, text_id in dialogue_links_from_cab(cab):
+                stats.links += 1
+                source_to_text.setdefault(source, set()).add(text_id)
+            for text_id, avatar_name in avatar_links_from_cab(cab):
+                stats.avatar_links += 1
+                previous = avatar_to_text.get(text_id)
+                if previous is None:
+                    avatar_to_text[text_id] = avatar_name
+                    stats.avatar_values += 1
+                elif previous != avatar_name:
+                    ambiguous_avatar.add(text_id)
+    for text_id in ambiguous_avatar:
+        avatar_to_text.pop(text_id, None)
+    stats.sources = len(source_to_text)
+    stats.text_ids = len({text_id for values in source_to_text.values() for text_id in values})
+    return source_to_text, avatar_to_text, stats

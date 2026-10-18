@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zzz-story-extractor"
+version = "0.2.0"
+description = "Extract Zenless Zone Zero main-story text with per-line speakers and query it through a local MCP server."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "requests>=2.31",
+  "pyooz>=0.0.8",
+  "xxhash>=4.0",
+  "cryptography>=42",
+  "mcp>=2.3,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+zzz-story = "zzz_story.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["zzz_story*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

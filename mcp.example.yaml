@@ -1,0 +1,31 @@
+# 参考 akasha 的 dsh-mcp-client 配置，把绝区零剧情库挂成 MCP。
+# 先启动服务：
+#   .\.venv\Scripts\python.exe -m zzz_story build-db
+#   .\.venv\Scripts\python.exe -m zzz_story mcp --transport streamable-http --port 8765
+#
+# 然后在本机 MCP 配置中插入：
+- insert:
+    id: mcp-zzz-story
+    name: '@deepseek-ai/dsh-mcp-client'
+    config:
+      serverName: zzz-story
+      transport: streamable-http
+      url: http://127.0.0.1:8765/mcp
+      # 本地服务不需要鉴权；如果以后加了反代，再打开：
+      # headers:
+      #   Authorization: 'Bearer <你的 API Key>'
+
+# stdio 方式（由客户端拉起进程，不需要先启动 HTTP 服务）：
+# - insert:
+#     id: mcp-zzz-story-stdio
+#     name: '@deepseek-ai/dsh-mcp-client'
+#     config:
+#       serverName: zzz-story
+#       transport: stdio
+#       command: C:\Users\Administrator\Documents\GitHub\zzz-story-extractor\.venv\Scripts\python.exe
+#       args:
+#         - -m
+#         - zzz_story
+#         - mcp
+#         - --db
+#         - C:\Users\Administrator\Documents\GitHub\zzz-story-extractor\out\zzz_story_3.2.0_chs\story.sqlite
