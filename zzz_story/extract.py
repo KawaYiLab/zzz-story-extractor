@@ -91,6 +91,51 @@ class ExtractStats:
     speaker_stats: dict = field(default_factory=dict)
 
 
+def _load_scene_titles(data_paths: dict[str, Path], text_map: TextMap) -> dict[str, str]:
+    titles: dict[str, str] = {}
+    perform_path = data_paths.get("FileCfg/PerformTemplateTb.json")
+    if perform_path and perform_path.exists():
+        try:
+            perf = read_json(perform_path)
+            rows = perf.get("IAEFFFFLKNB", []) if isinstance(perf, dict) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                title_key = row.get("PMINKNAOFOO")
+                if not title_key:
+                    continue
+                title = text_map.get(title_key)
+                if not title:
+                    continue
+                title = title.strip().strip("「」")
+                if not title:
+                    continue
+                asset = row.get("BCKKFAEFDPP", "")
+                m = re.search(r"Chapter\w+/[A-Za-z]+_Chapter\w+_(\w+)\.asset", asset, re.IGNORECASE)
+                if m:
+                    titles[m.group(1)] = title
+                pid = str(row.get("PFOAJKNPCHL") or "")
+                if pid:
+                    titles[pid] = title
+        except Exception:
+            pass
+
+    for key, val in text_map.items():
+        if not val or not isinstance(val, str):
+            continue
+        cleaned = val.strip().strip("「」")
+        if not cleaned:
+            continue
+        if key.startswith("Title_"):
+            sc = key[6:]
+            titles.setdefault(sc, cleaned)
+        elif key.startswith("Quest_VHSPerformName_"):
+            sc = key[len("Quest_VHSPerformName_"):]
+            titles.setdefault(sc, cleaned)
+
+    return titles
+
+
 def _line_sort_key(record: dict) -> tuple:
     info = chapter_info(record["chapter"])
     return (
@@ -142,6 +187,7 @@ def extract(
     print("Loading TextMap...")
     text_map = load_text_map(data_paths, language=lang)
     print(f"  {len(text_map)} entries loaded")
+    scene_titles = _load_scene_titles(data_paths, text_map)
 
     game_dir = detect_game_dir(game_dir)
     if game_dir:
@@ -337,6 +383,8 @@ def extract(
             "chapter_label": info_chapter.label,
             "chapter_order": info_chapter.order,
             "scene": scene,
+            "scene_act": 0,
+            "scene_title": None,
             "family": family,
             "line_no": pending_record["_line_no"],
             "sub_no": pending_record["_sub_no"],
@@ -376,6 +424,21 @@ def extract(
             seen.add(key)
             kept.append(record)
         records = kept
+
+    scene_acts_by_chapter: dict[str, dict[str, int]] = {}
+    for record in records:
+        chapter = record["chapter"]
+        scene = record["scene"]
+        acts = scene_acts_by_chapter.setdefault(chapter, {})
+        if scene not in acts:
+            acts[scene] = len(acts) + 1
+        record["scene_act"] = acts[scene]
+        title = (
+            scene_titles.get(scene)
+            or scene_titles.get(scene.lstrip("0"))
+            or scene_titles.get(scene.zfill(4))
+        )
+        record["scene_title"] = title
 
     _assign_line_ids(records)
     stats.total_lines = len(records)
@@ -606,6 +669,8 @@ def _write_csv(records: list[dict], path: Path) -> None:
         "chapter_label",
         "chapter_order",
         "scene",
+        "scene_act",
+        "scene_title",
         "family",
         "line_no",
         "sub_no",
@@ -628,6 +693,7 @@ def _write_csv(records: list[dict], path: Path) -> None:
         writer.writeheader()
         for record in records:
             row = dict(record)
+            row["scene_title"] = row.get("scene_title") or ""
             row["text_variants"] = json.dumps(row["text_variants"], ensure_ascii=False) if row["text_variants"] else ""
             row["scene_speakers"] = "、".join(row["scene_speakers"])
             writer.writerow(row)

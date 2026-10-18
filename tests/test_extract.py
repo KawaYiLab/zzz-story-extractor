@@ -17,6 +17,7 @@ def test_extract_fixture(tmp_path, monkeypatch):
         "Main_GalGame_Chapter00_10000002_Name_001": "苏茜",
         "MainChat_Chapter01_001_01": "聊天内容",
         "Comic_abcdef": "漫画内容",
+        "Title_10000002": "「测试场景」",
     }
     _write(data / "TextMap/TextMapTemplateTb.json", text_map)
     _write(data / "TextMap/TextMapOverwriteTemplateTb.json", {})
@@ -57,7 +58,10 @@ def test_extract_fixture(tmp_path, monkeypatch):
     assert len(galgame) == 2
     assert galgame[0]["scene_speakers"] == ["苏茜"]
     assert galgame[0]["speaker"] is None
-    assert (out / "story.txt").exists()
+    assert galgame[0]["scene_act"] == 1
+    assert galgame[0]["scene_title"] == "测试场景"
+    story_txt = (out / "story.txt").read_text(encoding="utf-8")
+    assert "## 第 1 幕：测试场景（出场：苏茜）" in story_txt
     assert (out / "supplement.jsonl").exists()
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["source_version"] == "3.2.0"

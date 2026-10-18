@@ -68,6 +68,19 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
         if spk and spk not in cast and spk != "未标注":
             cast.append(spk)
 
+    scene_acts: dict[tuple[str, str], int] = {}
+    current_chapter_for_acts = None
+    act_counter = 0
+    for record in records:
+        ch = record.get("chapter") or ""
+        sc = record.get("scene") or ""
+        if ch != current_chapter_for_acts:
+            current_chapter_for_acts = ch
+            act_counter = 0
+        if (ch, sc) not in scene_acts:
+            act_counter += 1
+            scene_acts[(ch, sc)] = act_counter
+
     current_chapter = None
     current_scene = None
 
@@ -83,13 +96,16 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
         scene_key = (record.get("family"), record.get("scene"))
         if scene_key != current_scene:
             current_scene = scene_key
-            key = (record.get("chapter"), record.get("family"), record.get("scene"))
+            ch = record.get("chapter") or ""
+            sc = record.get("scene") or ""
+            key = (ch, record.get("family"), sc)
             cast = scene_cast_map.get(key, [])
+            act_num = record.get("scene_act") or scene_acts.get((ch, sc), 1)
+            title = record.get("scene_title")
+            title_str = f"：{title}" if title else ""
+            cast_str = f"（出场：{'、'.join(cast)}）" if cast else ""
             chunks.append("")
-            if cast:
-                chunks.append(f"## 场景 {record.get('scene')}（出场：{'、'.join(cast)}）")
-            else:
-                chunks.append(f"## 场景 {record.get('scene')}")
+            chunks.append(f"## 第 {act_num} 幕{title_str}{cast_str}")
             chunks.append("")
         chunks.append(_record_line(record))
 
