@@ -16,6 +16,8 @@ from .fetch import (
     read_game_version,
     read_json,
 )
+from .lore import extract_lore
+from .textmap import load_text_map
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -41,7 +43,18 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="keep both male/female protagonist branches instead of canonicalizing",
     )
+    extract_parser.add_argument(
+        "--no-lore",
+        action="store_true",
+        help="skip extracting worldbuilding lore (agents, equipment, interknot, cinema, etc.)",
+    )
     extract_parser.add_argument("--limit", type=int, default=None, help="only process the first N line keys (debug)")
+
+    lore_parser = sub.add_parser("extract-lore", help="extract only worldbuilding lore")
+    lore_parser.add_argument("--lang", default="CHS", help="TextMap language (default: CHS)")
+    lore_parser.add_argument("--out", type=Path, default=Path("out"), help="output directory")
+    lore_parser.add_argument("--data-dir", type=Path, default=None, help="local ZenlessData clone")
+    lore_parser.add_argument("--refresh", action="store_true", help="re-download ZenlessData files")
 
     doctor = sub.add_parser("doctor", help="check data, game and dependencies")
     doctor.add_argument("--data-dir", type=Path, default=None)
@@ -108,6 +121,31 @@ def main(argv: list[str] | None = None) -> int:
         version = DEFAULT_VERSION
         out = Path("out") / f"zzz_story_{version}_chs"
 
+    if args.command == "extract-lore":
+        try:
+            print("Loading data for lore extraction...")
+            data_paths = ensure_data(lang=args.lang, refresh=args.refresh, data_dir=args.data_dir)
+            text_map = load_text_map(data_paths, language=args.lang)
+            avatar_path = data_paths.get("FileCfg/AvatarBaseTemplateTb.json")
+            avatar_base = read_json(avatar_path) if avatar_path and avatar_path.exists() else None
+            stats = extract_lore(text_map, avatar_base, out)
+            print("")
+            print("Worldbuilding lore extraction completed successfully!")
+            print(f"  agents: {stats.get('lore_agents', 0)}")
+            print(f"  drive disc suits: {stats.get('lore_discs', 0)}")
+            print(f"  w-engines: {stats.get('lore_w_engines', 0)}")
+            print(f"  bangboos: {stats.get('lore_bangboos', 0)}")
+            print(f"  collectibles: {stats.get('lore_collectibles', 0)}")
+            print(f"  inter-knot quests: {stats.get('lore_quests', 0)}")
+            print(f"  inter-knot messages: {stats.get('lore_messages', 0)}")
+            print(f"  cinema movies: {stats.get('lore_movies', 0)} (reviews: {stats.get('lore_movie_comments', 0)})")
+            print(f"  world tips: {stats.get('lore_tips', 0)}, tarot relics: {stats.get('lore_tarots', 0)}")
+            print(f"  output: {out / 'lore'}")
+            return 0
+        except Exception as exc:  # noqa: BLE001
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
     try:
         extract(
             out_dir=out,
@@ -124,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             dedupe=not args.no_dedupe,
             canonical_gender=not args.keep_branches,
             limit=args.limit,
+            include_lore=not getattr(args, "no_lore", False),
         )
     except SystemExit as exc:
         print(exc)

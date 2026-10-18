@@ -23,6 +23,7 @@ from .fetch import (
     sha256_file,
 )
 from .keys import ParsedKey, natural_scene_key, parse_key
+from .lore import extract_lore
 from .speakers import SpeakerInfo, build_speaker_index
 from .textmap import TextMap, load_text_map
 from .writers import (
@@ -207,6 +208,7 @@ def extract(
     dedupe: bool = True,
     canonical_gender: bool = True,
     limit: int | None = None,
+    include_lore: bool = True,
 ) -> ExtractStats:
     protagonist = protagonist.upper()
     if protagonist not in {"M", "F", "BOTH"}:
@@ -573,6 +575,20 @@ def extract(
     if "csv" in formats_set:
         _write_csv(records, out_dir / "story.csv")
 
+    lore_stats: dict[str, int] = {}
+    if include_lore:
+        print("Extracting worldbuilding lore...")
+        avatar_path = data_paths.get("FileCfg/AvatarBaseTemplateTb.json")
+        avatar_base = read_json(avatar_path) if avatar_path and avatar_path.exists() else None
+        lore_stats = extract_lore(text_map, avatar_base, out_dir)
+        print(
+            f"  lore extracted: {lore_stats.get('lore_agents', 0)} agents, "
+            f"{lore_stats.get('lore_discs', 0)} discs, "
+            f"{lore_stats.get('lore_w_engines', 0)} engines, "
+            f"{lore_stats.get('lore_quests', 0)} quests, "
+            f"{lore_stats.get('lore_messages', 0)} messages"
+        )
+
     source_version = fetch_source_version()
     file_hashes = {}
     for rel, path in data_paths.items():
@@ -600,6 +616,7 @@ def extract(
         "by_chapter": stats.by_chapter,
         "supplement_lines": stats.supplement_lines,
         "speaker_stats": stats.speaker_stats,
+        "lore_stats": lore_stats,
     }
     manifest = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -617,6 +634,7 @@ def extract(
             "supplement_lines": stats.supplement_lines,
             "branch_filtered": stats.branch_filtered,
             "gender_pair_filtered": stats.gender_pair_filtered,
+            "lore": lore_stats,
         },
         "files": file_hashes,
     }
