@@ -1333,28 +1333,300 @@ def _extract_equipment(
 def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
     knot_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Commissions (QuestDesc_*)
-    quests: list[dict[str, str]] = []
-    for k, v in tm.items():
-        if k.startswith("QuestDesc_") and len(v.strip()) >= 15:
-            qid = k.replace("QuestDesc_", "")
-            name = _clean(tm.get(f"QuestName_{qid}", "未命名委托"))
-            target = _clean(tm.get(f"QuestTarget_{qid}", ""))
-            desc = _clean(v)
-            quests.append({"id": qid, "name": name, "target": target, "desc": desc})
+    # 1. Forum posts (PostTitle_*, Poster_*, PostText_*, PostScript_*, Comment<N>_*, Commentator<N>_*)
+    forum_posts: list[dict[str, Any]] = []
+    for k in tm.keys():
+        if k.startswith("PostTitle_"):
+            pid = k.replace("PostTitle_", "")
+            title = _clean(tm.get(k, ""))
+            if not title:
+                continue
+            poster = _clean(tm.get(f"Poster_{pid}", "匿名绳匠"))
+            text = _clean(tm.get(f"PostText_{pid}", ""))
+            script = _clean(tm.get(f"PostScript_{pid}", ""))
+            comments: list[dict[str, Any]] = []
+            for i in range(1, 20):
+                ct = _clean(tm.get(f"Comment{i}_{pid}", ""))
+                cu = _clean(tm.get(f"Commentator{i}_{pid}", ""))
+                if ct:
+                    comments.append({"floor": i, "user": cu or "热心网友", "text": ct})
 
-    q_md = ["# 绳网（Inter-Knot）委托档案与都市怪谈\n"]
-    q_md.append("> 传奇绳匠「法厄同」从绳网终端承接的各类委托信。包含了新艾利都市民的真实求助、空洞灾害调查与民间奇闻。\n")
-    for q in sorted(quests, key=lambda x: int(x["id"]) if x["id"].isdigit() else 9999):
-        q_md.append(f"## 【{q['name']}】（委托编号：{q['id']}）\n")
-        q_md.append("### 委托背景详情\n")
-        q_md.append(f"{q['desc']}\n")
-        if q["target"]:
-            q_md.append(f"**任务指引**：{q['target']}\n")
+            tag = "💬 综合交流"
+            if "委托" in title:
+                tag = "📌 悬赏委托"
+            elif "求助" in title or "招募" in title:
+                tag = "🆘 紧急求助"
+            elif "情报" in title or "怪谈" in title or "资讯" in title:
+                tag = "🔍 怪谈情报"
+            elif "灌水" in title or "讨论" in title:
+                tag = "☕ 市井闲聊"
+            elif "公告" in title or "通知" in title:
+                tag = "📢 绳网公告"
+
+            forum_posts.append({
+                "pid": pid,
+                "title": title,
+                "poster": poster,
+                "tag": tag,
+                "text": text,
+                "script": script,
+                "comments": comments,
+            })
+
+    def _post_sort_key(p: dict[str, Any]) -> tuple[int, int | str]:
+        pid = p["pid"]
+        return (0, int(pid)) if pid.isdigit() else (1, pid)
+
+    forum_posts.sort(key=_post_sort_key)
+
+    # 2. In-game Commissions (QuestName_*, QuestDesc_*, QuestTarget_*, HollowClient_*, etc.)
+    raw_quests: list[dict[str, Any]] = []
+    for k in tm.keys():
+        if not k.startswith("QuestName_"):
+            continue
+        qid = k.replace("QuestName_", "")
+        name = _clean(tm.get(k, ""))
+        if not name or "测试" in name or "test" in name.lower() or "temp" in name.lower() or "随意叠放" in name:
+            continue
+        # Filter out 3-star achievements (handled as child property of parent)
+        if len(qid) == 10 and (qid.endswith("50") or qid.endswith("51") or qid.endswith("52")):
+            continue
+        # Filter pure step checkpoints if parent exists
+        if len(qid) == 10 and f"QuestName_{qid[:8]}" in tm:
+            continue
+
+        desc = _clean(tm.get(f"QuestDesc_{qid}", ""))
+        target = _clean(tm.get(f"QuestTarget_{qid}", ""))
+        client = _clean(tm.get(f"HollowClient_{qid}", ""))
+
+        if not desc and not target and not client:
+            continue
+        if desc in ["TBD", "占位", "待定", "待补充"]:
+            continue
+        if len(desc) < 6 and not target and not client:
+            continue
+
+        map_name = _clean(tm.get(f"BigSceneMapName_4{qid}", ""))
+        map_desc = _clean(tm.get(f"BigSceneMapDes_4{qid}", ""))
+
+        achievements: list[tuple[str, str]] = []
+        for suffix in ["50", "51", "52"]:
+            ach_id = f"{qid}{suffix}"
+            aname = _clean(tm.get(f"HollowAchivementName_{ach_id}", ""))
+            adesc = _clean(tm.get(f"HollowAchivementDesc_{ach_id}", ""))
+            if aname:
+                achievements.append((aname, adesc))
+
+        in_targets: list[str] = []
+        for step in ["01", "02", "03", "04", "05"]:
+            it = _clean(tm.get(f"InHollowTarget_{qid}{step}", ""))
+            if it and it not in in_targets:
+                in_targets.append(it)
+
+        raw_quests.append({
+            "id": qid,
+            "name": name,
+            "desc": desc,
+            "target": target,
+            "client": client,
+            "map_name": map_name,
+            "map_desc": map_desc,
+            "achievements": achievements,
+            "in_targets": in_targets,
+        })
+
+    def _quest_sort_key(q: dict[str, Any]) -> tuple[int, int | str]:
+        qid = q["id"]
+        return (0, int(qid)) if qid.isdigit() else (1, qid)
+
+    raw_quests.sort(key=_quest_sort_key)
+
+    # Consolidate consecutive identical quests with same prefix
+    consolidated: list[dict[str, Any]] = []
+    curr: dict[str, Any] | None = None
+    for q in raw_quests:
+        qid = q["id"]
+        p = qid[:4] if qid.isdigit() and len(qid) >= 4 else qid
+        if curr and curr["name"] == q["name"] and curr["prefix"] == p:
+            curr["stages"].append(q)
+            if q["client"] and not curr["client"]:
+                curr["client"] = q["client"]
+            if q["achievements"] and not curr["achievements"]:
+                curr["achievements"] = q["achievements"]
+            if q["map_name"] and not curr["map_name"]:
+                curr["map_name"] = q["map_name"]
+                curr["map_desc"] = q["map_desc"]
+            if q["in_targets"]:
+                for it in q["in_targets"]:
+                    if it not in curr["in_targets"]:
+                        curr["in_targets"].append(it)
+        else:
+            if curr:
+                consolidated.append(curr)
+            curr = {
+                "first_id": qid,
+                "prefix": p,
+                "name": q["name"],
+                "desc": q["desc"],
+                "target": q["target"],
+                "client": q["client"],
+                "map_name": q["map_name"],
+                "map_desc": q["map_desc"],
+                "achievements": q["achievements"],
+                "in_targets": list(q["in_targets"]),
+                "stages": [q],
+            }
+    if curr:
+        consolidated.append(curr)
+
+    # Classify consolidated commissions into 4 canonical categories
+    for c in consolidated:
+        qid = c["first_id"]
+        name = c["name"]
+        target = c["target"]
+        desc = c["desc"]
+        client = c["client"]
+        if c["achievements"] or qid.startswith("1001") or client in ["「牧羊人」", "猫宫 又奈", "妮可·德玛拉"]:
+            c["cat_order"] = 1
+            c["cat_name"] = "⚔️ 核心空洞搜救"
+        elif qid.startswith("1005") or qid.startswith("51") or "同行" in target or "升阶" in name or "心愿" in target or "心愿" in desc:
+            c["cat_order"] = 3
+            c["cat_name"] = "🤝 代理人羁绊同行"
+        elif qid.startswith("1010") or qid.startswith("1228") or qid.startswith("1399") or qid.startswith("2310") or qid.startswith("30") or "考核" in name or "肃清" in name or "战线" in name:
+            c["cat_order"] = 4
+            c["cat_name"] = "🛡️ 协会考核特遣"
+        else:
+            c["cat_order"] = 2
+            c["cat_name"] = "🏘️ 街区街坊委托"
+
+    consolidated.sort(key=lambda x: (x["cat_order"], (0, int(x["first_id"])) if x["first_id"].isdigit() else (1, x["first_id"])))
+
+    cat_groups: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for c in consolidated:
+        cat_groups[c["cat_order"]].append(c)
+
+    q_md = ["# 绳网（Inter-Knot）委托人任务档案与市井怪谈全集\n"]
+    q_md.append(
+        "> 新艾利都传奇绳匠「法厄同」从绳网终端（Inter-Knot）与空洞深潜系统承接的全部委托档案。\n"
+        f"> 本档案完整收录「绳网论坛求助帖（共 {len(forum_posts)} 篇，含发帖人/正文/附言/楼层热评）」与「各街区实装正式委托（共 {len(consolidated)} 项，含委托人/空洞领域/行动目标/背景详情/三星观测指标/多阶段行动链）」，"
+        "严格按「论坛求助原帖 → 核心空洞搜救 → 街区街坊委托 → 代理人同行羁绊 → 协会考核特遣」五大官方板块与数值编号递增严格排序。\n"
+    )
+
+    q_md.append("## 绳网委托与求助全景速查总览表\n")
+    q_md.append("| 编号 | 委托 / 帖子标题 | 委托人 / 发帖人 | 官方分类 / 板块 | 核心目标 / 内容提要 |")
+    q_md.append("| :--- | :--- | :--- | :--- | :--- |")
+
+    for p in forum_posts:
+        summary = p["text"].replace("\n", " ").replace("|", "—")
+        if len(summary) > 42:
+            summary = summary[:42] + "..."
+        q_md.append(f"| `{p['pid']}` | **{p['title']}** | 👤 {p['poster']} | {p['tag']} | {summary} |")
+
+    for c in consolidated:
+        client_name = c["client"] if c["client"] else "街坊委托人"
+        summary = (c["target"] if c["target"] else c["desc"]).replace("\n", " ").replace("|", "—")
+        if len(summary) > 42:
+            summary = summary[:42] + "..."
+        q_md.append(f"| `{c['first_id']}` | **{c['name']}** | 👤 {client_name} | {c['cat_name']} | {summary} |")
+
+    q_md.append("\n---\n")
+
+    # Chapter 1: Forum Posts
+    q_md.append(
+        f"## 第一辑：绳网论坛求助与委托原帖（共 {len(forum_posts)} 篇）\n"
+        "> 新艾利都市民、盗洞客、调查员与匿名网民在绳网论坛发布的求助悬赏、空洞传闻与都市怪谈讨论帖。包含完整楼主原帖、附言与各楼层真实网友回帖。\n"
+    )
+    for p in forum_posts:
+        q_md.append(f"### 【帖子】{p['title']}（帖子编号：`{p['pid']}`）\n")
+        q_md.append("| 帖子参数 | 绳网论坛记录 |")
+        q_md.append("| :--- | :--- |")
+        q_md.append(f"| **发帖编号** | `{p['pid']}` |")
+        q_md.append(f"| **发帖人 / 楼主** | 👤 **{p['poster']}** |")
+        q_md.append(f"| **所属板块** | {p['tag']} |")
+        q_md.append(f"| **楼层回帖数** | 💬 {len(p['comments'])} 楼回复 |")
+        q_md.append("")
+
+        q_md.append("#### 📝 帖子原文内容\n")
+        q_md.append(f"> {p['text'].replace(chr(10), chr(10) + '> ')}\n")
+
+        if p["script"]:
+            q_md.append("#### 📌 楼主附言\n")
+            q_md.append(f"> *{p['script']}*\n")
+
+        if p["comments"]:
+            q_md.append(f"#### 💬 绳网网友回帖讨论（共 {len(p['comments'])} 楼）\n")
+            q_md.append("| 楼层 | 评论用户 | 留言内容 |")
+            q_md.append("| :--- | :--- | :--- |")
+            for cmt in p["comments"]:
+                cmt_text = cmt["text"].replace("\n", " ").replace("|", "—")
+                q_md.append(f"| #{cmt['floor']} | **{cmt['user']}** | {cmt_text} |")
+            q_md.append("")
+
         q_md.append("---\n")
+
+    # Chapters 2 to 5: Commissions
+    chapter_meta = [
+        (1, "第二辑：空洞深潜与核心搜救委托", "传奇绳匠「法厄同」亲自深入各类高危空洞执行的核心特务、人道搜救与治安搜证任务，附带空洞舞台环境勘测、阶段推进与三星观测评级指标。"),
+        (2, "第三辑：街区街坊委托与都市传闻", "六分街、光映广场、野火镇等生活街区街坊邻里发布的日常帮扶、机械改装与市井奇闻委托。"),
+        (3, "第四辑：代理人专属同行与信任委托", "各大阵营代理人向绳匠发起的专属同行邀请、升阶考验与私密委托。"),
+        (4, "第五辑：空洞调查协会与战线考评", "空洞调查协会（HIA）、治安局与防卫军组织的资质考核、战线肃清与模拟训练委托。"),
+    ]
+
+    for cat_idx, cat_title, cat_intro in chapter_meta:
+        group_items = cat_groups.get(cat_idx, [])
+        q_md.append(f"## {cat_title}（共 {len(group_items)} 项）\n> {cat_intro}\n")
+
+        for c in group_items:
+            client_display = c["client"] if c["client"] else "新艾利都市民 / 绳网委托人"
+            target_display = c["target"] if c["target"] else "探索空洞并达成委托目标"
+
+            q_md.append(f"### 【{c['name']}】（委托编号：`{c['first_id']}`）\n")
+            q_md.append("| 委托指标 | 任务终端归档记录 |")
+            q_md.append("| :--- | :--- |")
+            q_md.append(f"| **官方委托编号** | `{c['first_id']}` |")
+            q_md.append(f"| **委托人** | 👤 **{client_display}** |")
+            q_md.append(f"| **任务业务分类** | {c['cat_name']} |")
+            q_md.append(f"| **核心行动指引** | {target_display} |")
+            if c["map_name"]:
+                q_md.append(f"| **空洞舞台 / 区域** | 🌐 {c['map_name']} |")
+            q_md.append("")
+
+            q_md.append("#### 📋 委托背景详情\n")
+            q_md.append(f"> {c['desc'].replace(chr(10), chr(10) + '> ')}\n")
+
+            if c["map_desc"]:
+                q_md.append("#### 🗺️ 空洞环境勘测情报\n")
+                q_md.append(f"> {c['map_desc'].replace(chr(10), chr(10) + '> ')}\n")
+
+            if c["in_targets"]:
+                q_md.append("#### 🎯 空洞深入推进目标\n")
+                for it in c["in_targets"]:
+                    q_md.append(f"- {it}")
+                q_md.append("")
+
+            if c["achievements"]:
+                q_md.append("#### ⭐ 空洞观测评级目标（三星指标）\n")
+                q_md.append("| 星级目标 | 达成判定说明 |")
+                q_md.append("| :--- | :--- |")
+                for aname, adesc in c["achievements"]:
+                    q_md.append(f"| ⭐ **{aname}** | {adesc} |")
+                q_md.append("")
+
+            if len(c["stages"]) > 1:
+                q_md.append(f"#### 📜 委托行动阶段记录（共 {len(c['stages'])} 个阶段）\n")
+                q_md.append("| 阶段编号 | 行动指引 | 阶段背景详情 |")
+                q_md.append("| :--- | :--- | :--- |")
+                for s in c["stages"]:
+                    s_target = (s["target"] if s["target"] else "—").replace("|", "—")
+                    s_desc = (s["desc"] if s["desc"] else "—").replace("\n", " ").replace("|", "—")
+                    q_md.append(f"| `{s['id']}` | {s_target} | {s_desc} |")
+                q_md.append("")
+
+            q_md.append("---\n")
+
     (knot_dir / "01_委托人任务档案.md").write_text("\n".join(q_md), encoding="utf-8")
 
-    # 2. Private Messages (Message_*)
+    # 3. Private Messages (Message_*)
     threads: dict[str, list[tuple[str, str]]] = defaultdict(list)
     for k, v in tm.items():
         if k.startswith("Message_"):
@@ -1380,7 +1652,7 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
         msg_md.append("---\n")
     (knot_dir / "02_绳网私信与手机短信.md").write_text("\n".join(msg_md), encoding="utf-8")
 
-    return {"lore_quests": len(quests), "lore_messages": msg_count}
+    return {"lore_quests": len(consolidated) + len(forum_posts), "lore_messages": msg_count}
 
 
 def _extract_cinema(tm: TextMap, cinema_dir: Path) -> dict[str, int]:
@@ -1528,7 +1800,7 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "- [03_邦布机体图鉴](equipment/03_邦布机体图鉴.md)：全 42 款邦布机体全景图鉴（22款S级、19款A级与特型向导机体）、机体格言、技能回路、助战鸣徽与萌趣台词",
         "- [04_收藏展架与风味展品](equipment/04_收藏展架与风味展品.md)：全 132 件收藏展架珍品全集（纪事珍存、活动限定、三Z潮玩套组与音擎微缩模型）、风味物语与题记名言\n",
         "### 3. 绳网论坛与通讯 (`lore/interknot/`)",
-        "- [01_委托人任务档案](interknot/01_委托人任务档案.md)：700+ 长篇委托求助信、事件背景与空洞救援记录",
+        "- [01_委托人任务档案](interknot/01_委托人任务档案.md)：全量绳网论坛委托求助信（发帖人/正文/附言/楼层热评）与各街区实装委托档案（委托人/空洞舞台/三星指标/阶段链），严格按五大官方板块与编号递增排序",
         "- [02_绳网私信与手机短信](interknot/02_绳网私信与手机短信.md)：即时通讯私信会话流（日常吐槽、八卦求助、协会联络）\n",
         "### 4. Random Play 录像店影音档案 (`lore/cinema/`)",
         "- [01_旧文明电影与影评](cinema/01_旧文明电影与影评.md)：录像店全部经典影片长梗概与顾客大众影评\n",

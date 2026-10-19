@@ -57,10 +57,19 @@ def test_extract_lore(tmp_path):
         "CollectionDesc_3700109": "根据格莱特保存的「真白君」影像资料制作。它不只是一座建筑质量堪忧的烂尾楼，还是掘进机的爱人——尽管它本人…本楼，对此缄默不言。",
         "CollectionName_3700119": "模型：德玛拉电池Ⅱ型",
         "CollectionDesc_3700119": "原型是一款重视储能效率的定制款音擎核心。<color=#575757>「武器就应该是危险的。」——安比，小心翼翼保养时的回答</color>",
-        # Inter-Knot Quest
+        # Inter-Knot Quest & Forum Post
         "QuestName_10010001": "兔与绳",
         "QuestDesc_10010001": "狡兔屋的妮可冲进店里，说有紧急委托要找法厄同...",
         "QuestTarget_10010001": "与妮可交谈",
+        "HollowClient_10010001": "妮可·德玛拉",
+        "HollowAchivementName_1001000150": "这就是绳匠",
+        "HollowAchivementDesc_1001000150": "首次揭露空洞新区域",
+        "PostTitle_1001": "[灌水]以太适性自测结果是这个分数...",
+        "Poster_1001": "lalala",
+        "PostText_1001": "本人学生，高中还没毕业...",
+        "PostScript_1001": "在线等挺急的",
+        "Comment1_1001": "你该不是故意在秀吧...",
+        "Commentator1_1001": "空洞旅人",
         # Message
         "Message_100700701": "绳匠，今天有空吗？",
         "Message_100700702": "野火镇的集市要开始了！",
@@ -98,7 +107,7 @@ def test_extract_lore(tmp_path):
     assert stats["lore_w_engines"] == 1
     assert stats["lore_bangboos"] == 1
     assert stats["lore_collectibles"] == 2
-    assert stats["lore_quests"] == 1
+    assert stats["lore_quests"] == 2
     assert stats["lore_messages"] == 2
     assert stats["lore_movies"] == 1
     assert stats["lore_movie_comments"] == 1
@@ -162,6 +171,17 @@ def test_extract_lore(tmp_path):
     assert "模型：德玛拉电池Ⅱ型" in col_doc
     assert "专属题记 / 纪念名言" in col_doc
     assert "「武器就应该是危险的。」——安比，小心翼翼保养时的回答" in col_doc
+
+    knot_doc = (out_dir / "lore" / "interknot" / "01_委托人任务档案.md").read_text(encoding="utf-8")
+    assert "绳网委托与求助全景速查总览表" in knot_doc
+    assert "第一辑：绳网论坛求助与委托原帖" in knot_doc
+    assert "以太适性自测结果" in knot_doc
+    assert "lalala" in knot_doc
+    assert "空洞旅人" in knot_doc
+    assert "第二辑：空洞深潜与核心搜救委托" in knot_doc
+    assert "兔与绳" in knot_doc
+    assert "妮可·德玛拉" in knot_doc
+    assert "这就是绳匠" in knot_doc
 
 
 
