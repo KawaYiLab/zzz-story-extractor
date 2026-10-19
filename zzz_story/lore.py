@@ -1170,19 +1170,156 @@ def _extract_equipment(
     (equip_dir / "03_邦布机体图鉴.md").write_text("\n".join(bangboo_md), encoding="utf-8")
 
     # 4. Collectibles (CollectionDesc_*)
-    collections: list[dict[str, str]] = []
+    collections: list[dict[str, Any]] = []
     for k, v in tm.items():
         if k.startswith("CollectionDesc_"):
             cid = k.replace("CollectionDesc_", "")
+            if not cid.isdigit():
+                continue
             name = _clean(tm.get(f"CollectionName_{cid}", f"藏品 {cid}"))
-            text = _clean(v)
-            if text and len(text) > 10:
-                collections.append({"name": name, "desc": text})
+            raw_text = clean_text(v).text.strip()
+            if not raw_text or len(raw_text) < 5:
+                continue
+            # Filter internal test dummy data
+            if "测试数据" in name or "测试数据" in raw_text:
+                continue
 
-    col_md = ["# 录像店展示架与收藏品风味物语\n"]
-    col_md.append("> Random Play 货架上陈列的纪念品与市井手办，记录着六分街街坊与委托人的生活趣事。\n")
-    for c in collections:
-        col_md.append(f"## 【{c['name']}】\n\n{c['desc']}\n\n---\n")
+            # Parse quote if present: 「...」——... or ...——...
+            quote = ""
+            story = raw_text
+            m = re.search(r'(「[^」\n]+?」\s*——\s*[^\n]+)$', raw_text)
+            if not m:
+                m = re.search(r'([^\n]+——\s*(?:安比|妮可|可琳|比利|安东|本|艾莲|珂蕾妲|莱卡恩|猫又|苍角|「11号」|丽娜|格莉丝|朱鸢|赛斯|简|露西|派派|青衣|凯撒|柏妮思|莱特|月城柳|星见雅|柚叶|真斗|照|奥菲丝|语出|课间)[^\n]*)$', raw_text)
+            if m:
+                quote = m.group(1).strip()
+                story = raw_text[:m.start()].strip()
+
+            # Categorize into the 4 official CollectionCabinet types
+            if name.startswith("模型：") or name in ("奇机弄巧",):
+                cat = "音擎模型"
+                cat_badge = "⚙️ 音擎微缩模型"
+                cat_order = 3
+                sub = "音擎微缩手办·限定玩具" if "限定玩具" in raw_text else "音擎微缩手办·战术原型"
+            elif any(suit in name or suit in raw_text for suit in ("三Z", "4WD", "0WD", "1WD", "等待", "蔬果国度", "生瓷有道", "桌上丽都", "火锅派对", "市井琐记", "甘甜夏日", "健康计划", "蔬菜天团")):
+                cat = "潮流藏品"
+                cat_badge = "🧸 潮流藏品"
+                cat_order = 2
+                if "等待" in name:
+                    sub = "「等待…」概念潮玩系列"
+                elif "三Z潮音" in name:
+                    sub = "三Z潮音·乐队代言系列"
+                elif any(k in name for k in ("4WD", "0WD", "1WD")):
+                    sub = "驾梦漫布·邦布四驱车系列"
+                elif any(k in name for k in ("甘甜夏日", "健康计划", "蔬菜天团")) or "蔬果国度" in raw_text:
+                    sub = "邦布蔬果国度设计品系列"
+                elif "生瓷有道" in name or "发财" in name:
+                    sub = "生瓷有道·招财摆件系列"
+                elif "桌上丽都" in name:
+                    sub = "桌上丽都·生活美学系列"
+                elif "火锅派对" in name:
+                    sub = "火锅派对·「煮釜」联名摆件系列"
+                elif "市井琐记" in name:
+                    sub = "市井琐记·六分街见闻系列"
+                else:
+                    sub = "三Z STUDIO 潮流藏品"
+            elif any(kw in name for kw in ("麦麦", "闪耀的此棒", "闪味奇盘", "咚哒回声")):
+                cat = "活动限定"
+                cat_badge = "🎉 活动限定"
+                cat_order = 1
+                if "麦麦" in name:
+                    sub = "品牌联名·超大发光薯条灯"
+                elif "闪耀的此棒" in name:
+                    sub = "巨星盛典·耀嘉音演唱会限定"
+                elif "闪味奇盘" in name:
+                    sub = "市集特供·滋滋脆脆美食铺餐盘"
+                else:
+                    sub = "学园风物·奥蕾莉亚学院特制小鼓"
+            else:
+                cat = "纪事珍存"
+                cat_badge = "📜 纪事珍存"
+                cat_order = 0
+                if "星见雅" in name:
+                    sub = "特别羁绊·星见雅亲制信物"
+                elif "伊埃斯" in raw_text or "如愿遂心" in name or "璀璨流金" in name:
+                    sub = "传奇日常·绳匠兄妹与伊埃斯"
+                elif "格莱特" in name:
+                    sub = "街坊故事·掘进机与「真白君」"
+                elif "治安官" in name:
+                    sub = "市井趣闻·治安局抽奖阳光普照"
+                elif "沙盘" in name:
+                    sub = "战略演习·小邦布战术沙盘"
+                elif "游侠骑士" in name:
+                    sub = "荣誉认可·游侠骑士阿吉之盔"
+                elif "倾心泪" in name:
+                    sub = "少女祈愿·纯净泪滴纪念"
+                else:
+                    sub = "城市生活·纪事珍存物语"
+
+            collections.append({
+                "cid": cid,
+                "name": name,
+                "story": story,
+                "quote": quote,
+                "cat": cat,
+                "cat_badge": cat_badge,
+                "cat_order": cat_order,
+                "sub": sub,
+            })
+
+    # Canonical sorting: Category (0..3) -> Numerical CID ascending
+    def _col_sort_key(c: dict[str, Any]) -> tuple[int, int]:
+        cid_int = int(c["cid"]) if c["cid"].isdigit() else 9999999
+        return (c["cat_order"], cid_int)
+
+    sorted_collections = sorted(collections, key=_col_sort_key)
+
+    col_md = [
+        "# 录像店展示架与收藏品风味物语\n",
+        "> Random Play 货架与展柜上陈列的纪念品、市井手办、潮流玩偶与音擎微缩模型，记录着六分街街坊、委托人与代理人的日常趣事与深层回忆。\n",
+        "> 本档案完整收录全城共 132 件实装展架藏品，全系严格按「纪事珍存（8件） → 活动限定（3件） → 潮流藏品（23件） → 音擎模型（98件）」四大官方分类与藏品编号（Numerical ID）递增严格排序。\n",
+        "## 全 132 件展架藏品风味速查总览表\n",
+        "| 编号 | 展品名称 | 官方分类 | 所属系列 / 主题 | 展品风味简介 |",
+        "| :--- | :--- | :--- | :--- | :--- |",
+    ]
+
+    for c in sorted_collections:
+        brief = c["story"].replace("\n", " ").strip()
+        if len(brief) > 45:
+            brief = brief[:43] + "..."
+        col_md.append(f"| `{c['cid']}` | **{c['name']}** | {c['cat_badge']} | {c['sub']} | {brief} |")
+
+    col_md.append("\n---\n")
+
+    current_cat = -1
+    cat_titles = [
+        "## 第一辑：纪事珍存与市井纪念（共 8 件）\n> 六分街街坊的生活赠礼、代理人亲赠信物与法厄同兄妹的探险留念。\n",
+        "## 第二辑：活动限定与庆典风物（共 3 件）\n> 新艾利都跨界品牌联名、巨星演艺庆典与商业街特供纪念品。\n",
+        "## 第三辑：三Z潮流潮玩与套组展品（共 23 件）\n> 六分街「三Z设计工作室（三Z STUDIO）」与潮流品牌旗下热门系列。\n",
+        "## 第四辑：音擎微缩手办与战术原型模型（共 98 件）\n> 代理人专属武器与工坊经典音擎的 1:1 比例精密微缩展品，附带使用者专属题记。\n",
+    ]
+
+    for c in sorted_collections:
+        if c["cat_order"] != current_cat:
+            current_cat = c["cat_order"]
+            col_md.append(cat_titles[current_cat])
+
+        col_md.append(f"### 【{c['name']}】（编号：`{c['cid']}`）\n")
+        col_md.append("| 展品指标 | 展柜配置记录 |")
+        col_md.append("| :--- | :--- |")
+        col_md.append(f"| **官方藏品编号** | `{c['cid']}` |")
+        col_md.append(f"| **官方所属分类** | {c['cat_badge']} |")
+        col_md.append(f"| **所属系列 / 题材** | {c['sub']} |")
+        col_md.append("| **展架陈列类型** | 货架陈列摆件 / 微缩模型 |")
+        col_md.append("")
+
+        col_md.append("#### 📖 展品风味文献\n")
+        col_md.append(f"> {c['story'].replace(chr(10), chr(10) + '> ')}\n")
+
+        if c["quote"]:
+            col_md.append("#### 💬 专属题记 / 纪念名言\n")
+            col_md.append(f"> *{c['quote']}*\n")
+
+        col_md.append("---\n")
     (equip_dir / "04_收藏展架与风味展品.md").write_text("\n".join(col_md), encoding="utf-8")
 
     return {
@@ -1389,7 +1526,7 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "- [01_驱动盘唱片物语](equipment/01_驱动盘唱片物语.md)：全 30 套驱动盘唱片文献、调律属性与 6 重奏分轨物语全集",
         "- [02_音擎档案与题记](equipment/02_音擎档案与题记.md)：全 100 款音擎战术构造、核心改装回路与专属题记名言录全集",
         "- [03_邦布机体图鉴](equipment/03_邦布机体图鉴.md)：全 42 款邦布机体全景图鉴（22款S级、19款A级与特型向导机体）、机体格言、技能回路、助战鸣徽与萌趣台词",
-        "- [04_收藏展架与风味展品](equipment/04_收藏展架与风味展品.md)：录像店货架手办与纪念品风味物语\n",
+        "- [04_收藏展架与风味展品](equipment/04_收藏展架与风味展品.md)：全 132 件收藏展架珍品全集（纪事珍存、活动限定、三Z潮玩套组与音擎微缩模型）、风味物语与题记名言\n",
         "### 3. 绳网论坛与通讯 (`lore/interknot/`)",
         "- [01_委托人任务档案](interknot/01_委托人任务档案.md)：700+ 长篇委托求助信、事件背景与空洞救援记录",
         "- [02_绳网私信与手机短信](interknot/02_绳网私信与手机短信.md)：即时通讯私信会话流（日常吐槽、八卦求助、协会联络）\n",
@@ -1405,6 +1542,7 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         f"- **收录驱动盘唱片**：{stats.get('lore_discs', 0)} 套",
         f"- **收录音擎装备**：{stats.get('lore_w_engines', 0)} 款",
         f"- **收录邦布图鉴**：{stats.get('lore_bangboos', 0)} 只",
+        f"- **收录展架藏品**：{stats.get('lore_collectibles', 0)} 件",
         f"- **收录长篇委托**：{stats.get('lore_quests', 0)} 条",
         f"- **收录短信对话**：{stats.get('lore_messages', 0)} 条",
         f"- **收录旧文明影片**：{stats.get('lore_movies', 0)} 部（影评 {stats.get('lore_movie_comments', 0)} 条）",
