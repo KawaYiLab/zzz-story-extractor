@@ -79,6 +79,10 @@ def test_extract_lore(tmp_path):
         # Cinema
         "Cinema_CinemaConfig_01_Description": "流星雨过后的怪人与骑士特摄剧...",
         "Cinema_CinemaConfig_01_Tittle": "星徽骑士：另一位骑士",
+        "Cinema_CinemaConfig_Tag_01": "动作",
+        "Cinema_SpeakerName_610200001": "星徽骑士",
+        "Cinema_DoubleDate_610200001": "英雄没有逃跑的理由，真正的王牌唯有自身，尽管来吧—",
+        "Cinema_Comment_101_Name": "比利",
         "Cinema_Comment_101_Content": "满分神作！",
         # Glossary
         "Tips_100001": "空洞内出现了紧急委托，请立刻前往以太探测系统！",
@@ -195,3 +199,11 @@ def test_extract_lore(tmp_path):
     assert "豪爽仗义的霸主" in sms_doc
     assert "1007007" in sms_doc
     assert "野火镇的集市要开始了！" in sms_doc
+
+    cinema_doc = (out_dir / "lore" / "cinema" / "01_旧文明电影与影评.md").read_text(encoding="utf-8")
+    assert "旧文明经典馆藏全景速查总览表" in cinema_doc
+    assert "星徽骑士：另一位骑士" in cinema_doc
+    assert "动作" in cinema_doc
+    assert "英雄没有逃跑的理由" in cinema_doc
+    assert "比利" in cinema_doc
+    assert "满分神作！" in cinema_doc

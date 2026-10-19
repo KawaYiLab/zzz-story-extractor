@@ -2006,12 +2006,107 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
     return {"lore_quests": len(consolidated) + len(forum_posts), "lore_messages": msg_count}
 
 
+FILM_COMMENT_GROUPS: dict[int, list[str]] = {
+    1: ["101", "102", "103", "104", "105", "106"],
+    2: ["201", "202", "203", "204", "205", "206", "2101", "2102", "2103", "2104", "2105"],
+    3: ["301", "302", "303", "304", "305", "306", "2201", "2202", "2203", "2204", "2205"],
+    4: ["401", "402", "403", "404", "405"],
+    5: ["501", "502", "503", "504", "505"],
+    6: ["601", "602", "603", "604", "605"],
+    7: ["701", "702", "703", "704", "705", "3001", "3002", "3003", "3004", "3005"],
+    8: ["801", "802", "803", "804", "805", "2901", "2902", "2903", "2904", "2905"],
+    9: ["901", "902", "903", "904", "905"],
+    10: ["1001", "1002", "1003", "1004"],
+    11: ["1101", "1102", "1103", "1104", "1105", "2301", "2302", "2303", "2304", "2305"],
+    12: ["1201", "1202", "1203", "1204", "1205", "2601", "2602", "2603", "2604", "2605"],
+    13: ["1301", "1302", "1303", "1304", "1305"],
+    14: ["1401", "2701", "2702", "2703", "2704", "2705"],
+    15: ["2801", "2802", "2803", "2804", "2805"],
+    16: ["2501", "2502", "2503", "2504", "2505"],
+    17: ["2401", "2402", "2403", "2404", "2405"],
+}
+
+FILM_QUOTE_RANGES: dict[int, range] = {
+    1: range(1, 3),    # 星徽骑士 (01-02)
+    2: range(3, 7),    # 严厉的调查员, 坚定的母亲 (03-06)
+    3: range(7, 10),   # 安吉丽娜, 洛普先生 (07-09)
+    4: range(10, 13),  # 安娜, 杰森 (10-12)
+    5: range(13, 15),  # 实习调查员 (13-14)
+    6: range(15, 18),  # 艾琳达, 乔瑟夫 (15-17)
+    7: range(18, 23),  # 莉莉安 (18-22)
+    8: range(23, 27),  # 鲍勃, 热心姐姐 (23-26)
+    9: range(27, 30),  # 成熟的治安官, 年轻的治安官 (27-29)
+    10: range(30, 35), # 「我」的独白 (30-34)
+    11: range(35, 38), # 迟到的客人, 胭儿 (35-37)
+    12: range(38, 41), # 调查员, 小狗洛斯 (38-40)
+    13: range(41, 45), # 惊惶的冒险者, 绝望的冒险者 (41-44)
+}
+
+
 def _extract_cinema(tm: TextMap, cinema_dir: Path) -> dict[str, int]:
     cinema_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Movies & Reviews
+    # 1. Collect all comments from tm
+    all_comments: dict[str, dict[str, str]] = {}
+    for k, v in tm.items():
+        if k.startswith("Cinema_Comment_") and k.endswith("_Content"):
+            cid = k[len("Cinema_Comment_"):-len("_Content")]
+            content = _clean(v)
+            if content:
+                name_k = f"Cinema_Comment_{cid}_Name"
+                name = _clean(tm.get(name_k, "热心影迷")) or "热心影迷"
+                all_comments[cid] = {"name": name, "content": content}
+
+    # Store manager reflections: cid "1" (铃) and "2" (哲)
+    manager_reflections: list[tuple[str, str, str]] = []
+    for cid in ["2", "1"]:  # 哲 then 铃
+        if cid in all_comments:
+            m_info = all_comments[cid]
+            display_role = "兄长·哲" if "哲" in m_info["name"] else ("胞妹·铃" if "铃" in m_info["name"] else m_info["name"])
+            manager_reflections.append((cid, display_role, m_info["content"]))
+
+    # Reverse map from cid to movie_id
+    cid_to_movie: dict[str, int] = {}
+    for mid, cids in FILM_COMMENT_GROUPS.items():
+        for cid in cids:
+            cid_to_movie[cid] = mid
+
+    # Group comments by movie_id
+    movie_comments: dict[int, list[tuple[str, str, str]]] = {i: [] for i in range(1, 100)}
+    for cid, cinfo in all_comments.items():
+        if cid in ["1", "2"]:
+            continue
+        if cid in cid_to_movie:
+            mid = cid_to_movie[cid]
+            movie_comments[mid].append((cid, cinfo["name"], cinfo["content"]))
+        else:
+            # Fallback for standard 3/4-digit release IDs: e.g. 101 -> 1, 1001 -> 10
+            if cid.isdigit():
+                inferred_mid = int(cid) // 100
+                if 1 <= inferred_mid <= 99:
+                    movie_comments[inferred_mid].append((cid, cinfo["name"], cinfo["content"]))
+
+    # Sort comments within each movie numerically by cid
+    for mid in movie_comments:
+        movie_comments[mid].sort(key=lambda x: int(x[0]) if x[0].isdigit() else 99999)
+
+    # 2. Extract Quotes
+    movie_quotes: dict[int, list[tuple[str, str]]] = {}
+    for mid, q_range in FILM_QUOTE_RANGES.items():
+        q_list: list[tuple[str, str]] = []
+        for q_idx in q_range:
+            spk_k = f"Cinema_SpeakerName_6102000{q_idx:02d}"
+            txt_k = f"Cinema_DoubleDate_6102000{q_idx:02d}"
+            if txt_k in tm or spk_k in tm:
+                spk = _clean(tm.get(spk_k, ""))
+                txt = _clean(tm.get(txt_k, ""))
+                if txt:
+                    q_list.append((spk, txt))
+        if q_list:
+            movie_quotes[mid] = q_list
+
+    # 3. Movies Config
     movies: list[dict[str, Any]] = []
-    # Movies config
     for i in range(1, 100):
         desc_k = f"Cinema_CinemaConfig_{i:02d}_Description"
         name_k = f"Cinema_CinemaConfig_{i:02d}_Name"
@@ -2019,32 +2114,101 @@ def _extract_cinema(tm: TextMap, cinema_dir: Path) -> dict[str, int]:
         if desc_k in tm or name_k in tm or title_k in tm:
             desc = _clean(tm.get(desc_k, ""))
             name = _clean(tm.get(title_k, tm.get(name_k, f"经典影片 #{i:02d}")))
-            # Collect comments
-            comments: list[str] = []
-            prefix = f"Cinema_Comment_{i}"
-            for k, v in tm.items():
-                if k.startswith(prefix) and "Content" in k:
-                    c_text = _clean(v)
-                    if c_text and c_text not in comments:
-                        comments.append(c_text)
 
-            if desc:
-                movies.append({"id": f"{i:02d}", "name": name, "desc": desc, "comments": comments})
+            # Tags
+            tags: list[str] = []
+            tag_k = f"Cinema_CinemaConfig_Tag_{i:02d}"
+            if tag_k in tm:
+                t = _clean(tm.get(tag_k, ""))
+                if t and t not in tags:
+                    tags.append(t)
+            for sub in [1, 2, 3]:
+                sub_k = f"Cinema_CinemaConfig_Tag_{i:02d}_{sub}"
+                if sub_k in tm:
+                    t = _clean(tm.get(sub_k, ""))
+                    if t and t not in tags:
+                        tags.append(t)
+            tag_str = " / ".join(tags) if tags else "经典电影"
 
+            m_comments = movie_comments.get(i, [])
+            m_quotes = movie_quotes.get(i, [])
+
+            if desc or name:
+                movies.append({
+                    "id": f"{i:02d}",
+                    "num_id": i,
+                    "name": name,
+                    "desc": desc,
+                    "tag_str": tag_str,
+                    "tags": tags,
+                    "comments": m_comments,
+                    "quotes": m_quotes,
+                })
+
+    # Sort movies strictly ascending by num_id
+    movies.sort(key=lambda x: x["num_id"])
+
+    # 4. Generate Markdown
     c_md = ["# Random Play 录像店旧文明电影与大众影评\n"]
-    c_md.append("> 录像店藏品中收录的旧文明黄金时代经典电影、特摄剧、纪录片与顾客大众影评。\n")
-    total_comments = 0
+    c_md.append("> 录像店藏品中收录的旧文明黄金时代经典电影、特摄剧、纪录片与顾客大众影评。完整涵盖新艾利都影视金曲、流派标签、原声台词选摘与全量顾客短评。\n")
+
+    # Overview Table
+    c_md.append("## 📽️ 旧文明经典馆藏全景速查总览表\n")
+    c_md.append("| 录像带编号 | 经典片名 | 题材流派 / 标签 | 馆藏剧情梗概导读 | 经典原声选摘 | 影评篇数 |")
+    c_md.append("| :---: | :--- | :--- | :--- | :--- | :---: |")
     for m in movies:
-        c_md.append(f"## 《{m['name']}》（录像带编号：{m['id']}）\n")
+        short_desc = m["desc"].replace("\n", " ")
+        if len(short_desc) > 28:
+            short_desc = short_desc[:26] + "..."
+        if m["quotes"]:
+            first_spk, first_txt = m["quotes"][0]
+            clean_txt = first_txt.replace("\n", " ")
+            if len(clean_txt) > 16:
+                clean_txt = clean_txt[:15] + "..."
+            sample_q = f"【{first_spk}】{clean_txt}" if first_spk else f"“{clean_txt}”"
+        else:
+            sample_q = "暂无台词收录"
+        c_count = len(m["comments"])
+        c_md.append(f"| {m['id']} | 《{m['name']}》 | {m['tag_str']} | {short_desc} | {sample_q} | {c_count} 篇 |")
+    c_md.append("")
+
+    # Manager reflections if any
+    if manager_reflections:
+        c_md.append("## 🎞️ 店长放映杂感·观影出神札记\n")
+        c_md.append("> 录像店兄妹在放映厅忙碌一天后偷闲看片、或者在观影途中走神时记下的真实心声札记。\n")
+        for cid, role, content in manager_reflections:
+            c_md.append(f"- 💭 **{role}**：*“{content}”*")
+        c_md.append("\n---\n")
+
+    # Detailed Movie Sections
+    total_comments = len(manager_reflections)
+    for m in movies:
+        c_md.append(f"## {m['id']}. 《{m['name']}》（录像带编号：{m['id']}）\n")
+        c_md.append(f"- **题材流派 / 标签**：{m['tag_str']}\n")
         c_md.append("### 剧情梗概与题材背景\n")
         c_md.append(f"{m['desc']}\n")
+
+        if m["quotes"]:
+            c_md.append("### 经典原声台词选摘\n")
+            for spk, txt in m["quotes"]:
+                if spk:
+                    c_md.append(f"- 🗣️ **{spk}**：*“{txt}”*")
+                else:
+                    c_md.append(f"- 🗣️ *“{txt}”*")
+            c_md.append("")
+
         if m["comments"]:
-            c_md.append("### 顾客观影札记与热门影评\n")
-            for c in m["comments"]:
-                c_md.append(f"- 💬 *“{c}”*")
+            c_md.append(f"### 顾客观影札记与热门影评（共 {len(m['comments'])} 篇）\n")
+            for cid, name, content in m["comments"]:
+                c_md.append(f"- 💬 **{name}**：*“{content}”*")
                 total_comments += 1
             c_md.append("")
+        else:
+            c_md.append("### 顾客观影札记与热门影评\n")
+            c_md.append("> *暂无本店顾客发表影评记录。*\n")
+
         c_md.append("---\n")
+
     (cinema_dir / "01_旧文明电影与影评.md").write_text("\n".join(c_md), encoding="utf-8")
 
     return {"lore_movies": len(movies), "lore_movie_comments": total_comments}
@@ -2154,7 +2318,7 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "- [01_委托人任务档案](interknot/01_委托人任务档案.md)：全量绳网论坛委托求助信（发帖人/正文/附言/楼层热评）与各街区实装委托档案（委托人/空洞舞台/三星指标/阶段链），严格按五大官方板块与编号递增排序",
         "- [02_绳网私信与手机短信](interknot/02_绳网私信与手机短信.md)：即时通讯私信会话流（日常吐槽、八卦求助、协会联络）\n",
         "### 4. Random Play 录像店影音档案 (`lore/cinema/`)",
-        "- [01_旧文明电影与影评](cinema/01_旧文明电影与影评.md)：录像店全部经典影片长梗概与顾客大众影评\n",
+        "- [01_旧文明电影与影评](cinema/01_旧文明电影与影评.md)：录像店全部 17 部经典影片长梗概、题材流派、原声台词选摘与全量顾客大众影评\n",
         "### 5. 新艾利都世界观百科与空洞规则 (`lore/glossary/`)",
         "- [01_空洞与以太规则](glossary/01_空洞与以太规则.md)：主线章节历程纪事、以太活性、侵蚀机制与治安法规",
         "- [02_空洞鸣徽与古物预言](glossary/02_空洞鸣徽与古物预言.md)：零号空洞鸣徽考据与古物渊源\n",
