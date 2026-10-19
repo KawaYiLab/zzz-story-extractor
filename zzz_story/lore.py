@@ -183,6 +183,56 @@ SLOT_PARTITION_METADATA: dict[int, tuple[str, str]] = {
     6: ("VI号位（分区6）", "机制属性：能量自动回复 / 冲击力 / 异常掌控 / 攻击力% / 防御力% / 生命值%"),
 }
 
+# Bangboo tactical category and synergy mapping (Bangboo ID -> (Category, Activation Condition, Icon))
+BANGBOO_SYNERGY_MAP: dict[str, tuple[str, str, str]] = {
+    # Special / Protagonist Companion
+    "50001": ("法厄同专用", "传奇绳匠专属 / 神经同步联结向导", "⭐"),
+    # S-Rank (54001 ~ 54023)
+    "54001": ("冰属性特化", "2名或以上[冰属性]角色", "❄️"),
+    "54002": ("白祇重工", "2名或以上[白祇重工]阵营角色", "🏗️"),
+    "54003": ("以太属性特化", "2名或以上[以太属性]角色", "🔮"),
+    "54004": ("维多利亚家政", "2名或以上[维多利亚家政]阵营角色", "🧹"),
+    "54005": ("狡兔屋", "2名或以上[狡兔屋]阵营角色", "🐰"),
+    "54006": ("火属性特化", "2名或以上[火属性]角色", "🔥"),
+    "54008": ("电属性特化", "2名或以上[电属性]角色", "⚡"),
+    "54009": ("以太属性特化", "2名或以上[以太属性]角色", "🔮"),
+    "54010": ("妄想天使", "2名或以上[妄想天使]阵营角色", "🎤"),
+    "54011": ("卡吕冬之子", "2名或以上[卡吕冬之子]阵营角色", "🐗"),
+    "54012": ("刑侦特勤组", "2名或以上[新艾利都治安局]阵营角色", "👮"),
+    "54013": ("物理属性特化", "2名或以上[物理属性]角色", "🗡️"),
+    "54014": ("对空六课", "2名或以上[对空洞特别行动部第六课]阵营角色", "⚔️"),
+    "54015": ("天琴座", "2名或以上[天琴座]阵营角色", "✨"),
+    "54016": ("反舌鸟", "1名或以上[反舌鸟]阵营角色", "🎭"),
+    "54017": ("云岿山", "2名或以上[云岿山]阵营角色", "⛰️"),
+    "54018": ("怪啖屋", "2名或以上[怪啖屋]阵营角色", "👻"),
+    "54019": ("防卫军", "2名或以上[防卫军]阵营角色", "🛡️"),
+    "54020": ("坎卜斯黑枝", "2名或以上[坎卜斯黑枝]阵营角色", "🌿"),
+    "54021": ("达识结社", "队伍中存在[叶瞬光]", "📜"),
+    "54022": ("罗斯凯利法", "1名或以上[罗斯凯利法]阵营角色", "⚙️"),
+    "54023": ("空巡局", "队伍中存在[蕾米埃尔]", "🕊️"),
+    # A-Rank (53001 ~ 53021)
+    "53001": ("冰属性特化", "2名或以上[冰属性]角色", "❄️"),
+    "53002": ("物理属性特化", "2名或以上[物理属性]角色", "🗡️"),
+    "53003": ("支援型特化", "队伍中存在[支援]角色", "💚"),
+    "53004": ("击破型特化", "队伍中存在[击破]角色", "💥"),
+    "53005": ("防护型特化", "队伍中存在[防护]角色", "🛡️"),
+    "53006": ("强攻型特化", "队伍中存在[强攻]角色", "⚔️"),
+    "53007": ("火属性特化", "2名或以上[火属性]角色", "🔥"),
+    "53008": ("支援型特化", "队伍中存在[支援]角色", "💚"),
+    "53009": ("击破/穿透", "队伍中存在擅长[穿透]招式角色", "🎯"),
+    "53010": ("电属性特化", "2名或以上[电属性]角色", "⚡"),
+    "53011": ("异常型特化", "队伍中存在[异常]角色", "🌀"),
+    "53012": ("支援型特化", "队伍中存在[支援]角色", "💚"),
+    "53013": ("异常型特化", "队伍中存在[异常]角色", "🌀"),
+    "53014": ("强攻/异常", "队伍中存在[强攻]或[异常]角色", "💼"),
+    "53015": ("强攻/异常", "队伍中存在[强攻]或[异常]角色", "🥊"),
+    "53016": ("命破/击破", "队伍中存在[命破]角色", "👑"),
+    "53017": ("支援型特化", "队伍中存在[支援]角色", "🎠"),
+    "53019": ("支援型特化", "队伍中存在[支援]角色", "🧱"),
+    "53021": ("强攻/异常", "队伍中存在[强攻]或[异常]角色", "🎃"),
+}
+
+
 
 def _clean(raw: str, default: str = "") -> str:
     if not raw:
@@ -931,6 +981,9 @@ def _extract_equipment(
     for k, v in tm.items():
         if k.startswith("Bangboo_Name_") and not any(sub in k for sub in ["_en_", "Skill"]):
             bid = k.replace("Bangboo_Name_", "")
+            if bid in ("50002", "57001"):  # Filter internal test / dummy non-units
+                continue
+            name = _clean(v)
             desc = _clean(tm.get(f"Bangboo_Desc_{bid}", ""))
             en_name = _clean(tm.get(f"Bangboo_Name_en_{bid}", ""))
             act_title = _clean(tm.get(f"Bangboo_ActiveSkill_Title_{bid}", ""))
@@ -938,46 +991,181 @@ def _extract_equipment(
             qte_title = _clean(tm.get(f"Bangboo_QTE_Title_{bid}", ""))
             qte_des = _clean(tm.get(f"Bangboo_QTE_Des_{bid}", ""))
             talent_title = _clean(tm.get(f"Bangboo_TalentSkill_Title_{bid}", ""))
-            talent_des = _clean(tm.get(f"Bangboo_TalentSkill_Des_{bid}_01", ""))
+            talent_des_lv1 = _clean(tm.get(f"Bangboo_TalentSkill_Des_{bid}_01", ""))
+            talent_des_lv5 = _clean(tm.get(f"Bangboo_TalentSkill_Des_{bid}_05", ""))
+            tarot_name = _clean(tm.get(f"TarotCard_10{bid}_name", ""))
+            tarot_des = _clean(tm.get(f"TarotCard_10{bid}_des", ""))
 
-            # Voice tips
-            voice_lines = []
-            for i in range(1, 10):
+            # Handle Special / Eous
+            if bid == "50001":
+                rank = "SP"
+                rank_badge = "⭐ 特型机（传奇向导）"
+                if desc == "伊埃斯" or not desc:
+                    desc = "传奇绳匠「法厄同」的专属伴随向导机体。搭载深度以太共鸣传感与神经同步系统，是哲与铃探索未知空洞时意识连接的机械向导化身与得力助手。"
+                if not act_title:
+                    act_title = "空洞深潜向导（神经感知系统）"
+                    act_des = "在空洞探险中为代理人提供全息路线导航、以太活性预警与裂隙探测；在探索深渊时激活战略支援权限，开辟前线撤离通路。"
+                if not qte_title:
+                    qte_title = "法厄同之眼（实况指令联结）"
+                    qte_des = "通过高带宽以太神经同步链路，与哲/铃的意识深度同调，对全队代理人下达精准的弱点打击指引与战术协同指令。"
+                if not talent_title:
+                    talent_title = "以太奇点耐受"
+                    talent_des_lv1 = "具备罕见的高以太适性回路，即使在零号空洞最深层亦能免于以太侵蚀，为全队提供不竭的向导道标。"
+                    talent_des_lv5 = talent_des_lv1
+            elif bid.startswith("540"):
+                rank = "S"
+                rank_badge = "🟡 S级机体"
+            elif bid.startswith("530"):
+                rank = "A"
+                rank_badge = "🟣 A级机体"
+            else:
+                rank = "A"
+                rank_badge = "🟣 A级机体"
+
+            # Filter out entries with neither description nor skills
+            if not desc and not act_title and not qte_title:
+                continue
+
+            # Synergy mapping
+            if bid in BANGBOO_SYNERGY_MAP:
+                cat_tag, cond_desc, syn_icon = BANGBOO_SYNERGY_MAP[bid]
+            else:
+                syn_icon = "🤖"
+                cat_tag = "战术通用"
+                m = re.search(r"队伍中存在([^：:]+?)时触发", talent_des_lv1)
+                cond_desc = m.group(1).strip() if m else "全队通用协同"
+
+            # Voice lines
+            voice_lines: list[str] = []
+            for i in range(1, 15):
                 line = _clean(tm.get(f"Tips_{bid}0{i}", tm.get(f"Tips_{bid}{i:02d}", "")))
-                if line and "嗯" in line:
+                if line and line not in voice_lines:
                     voice_lines.append(line)
 
-            if desc:
-                bangboos.append({
-                    "id": bid,
-                    "name": _clean(v),
-                    "en_name": en_name,
-                    "desc": desc,
-                    "active_title": act_title,
-                    "active_des": act_des,
-                    "qte_title": qte_title,
-                    "qte_des": qte_des,
-                    "talent_title": talent_title,
-                    "talent_des": talent_des,
-                    "voices": voice_lines,
-                })
+            # Special exploration tips for Eous
+            tactical_tips: list[str] = []
+            if bid == "50001":
+                for i in range(101, 125):
+                    tline = _clean(tm.get(f"Tips_50001{i}", ""))
+                    if tline and tline not in tactical_tips:
+                        tactical_tips.append(tline)
 
-    bangboo_md = ["# 新艾利都邦布机体图鉴\n"]
-    bangboo_md.append("> 邦布（Bangboo）是新艾利都社会不可或缺的人工智能伙伴，也是空洞探索中唯一具备高以太适性的机械向导。\n")
-    for b in sorted(bangboos, key=lambda x: int(x["id"]) if x["id"].isdigit() else 9999):
-        bangboo_md.append(f"## {b['name']}（{b['en_name']}）\n")
-        bangboo_md.append(f"> **机体格言**：*{b['desc']}*\n")
+            bangboos.append({
+                "id": bid,
+                "rank": rank,
+                "rank_badge": rank_badge,
+                "name": name,
+                "en_name": en_name,
+                "desc": desc,
+                "cat_tag": cat_tag,
+                "cond_desc": cond_desc,
+                "syn_icon": syn_icon,
+                "active_title": act_title,
+                "active_des": act_des,
+                "qte_title": qte_title,
+                "qte_des": qte_des,
+                "talent_title": talent_title,
+                "talent_des_lv1": talent_des_lv1,
+                "talent_des_lv5": talent_des_lv5,
+                "tarot_name": tarot_name,
+                "tarot_des": tarot_des,
+                "voices": voice_lines,
+                "tactical_tips": tactical_tips,
+            })
+
+    # Canonical sorting: S-Rank (540xx) -> A-Rank (530xx) -> Special (50001), strictly numerical ID ascending
+    def _bangboo_sort_key(b: dict[str, Any]) -> tuple[int, int]:
+        bid_int = int(b["id"]) if b["id"].isdigit() else 99999
+        rank_order = 0 if b["rank"] == "S" else (1 if b["rank"] == "A" else 2)
+        return (rank_order, bid_int)
+
+    sorted_bangboos = sorted(bangboos, key=_bangboo_sort_key)
+
+    bangboo_md = [
+        "# 新艾利都邦布机体全景图鉴与核心技能档案\n",
+        "> 邦布（Bangboo）是新艾利都社会不可或缺的人工智能机械生命，也是空洞探索中唯一具备极高以太适性的探索向导。\n",
+        "> 本图鉴完整收录全城共 42 款实装战斗伴随与特型向导邦布（22 款 S 级机体、19 款 A 级机体与 1 款特型伴随向导），全系严格按「S 级巅峰机体 → A 级实用机体 → 特型向导机体」品质阶梯与官方机体代号（Numerical ID）递增严格排序，完整汇编机体格言、主动技回路、邦布连携技、专属额外能力（Lv.1 ~ Lv.5 满级）、零号空洞助战鸣徽及萌趣战斗台词。\n",
+        "## 邦布全景机体速查总览表\n",
+        "| 品质 | 邦布名称 (英文代号) | 战术/阵营偏向 | 主动技回路 | 连携技 | 专属额外能力 | 萌趣台词摘录 |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+    ]
+
+    for b in sorted_bangboos:
+        rank_tag = "🟡 S级" if b["rank"] == "S" else ("🟣 A级" if b["rank"] == "A" else "⭐ 特型")
+        act_tag = b["active_title"] if b["active_title"] else "—"
+        qte_tag = b["qte_title"] if b["qte_title"] else "—"
+        talent_tag = b["talent_title"] if b["talent_title"] else "—"
+        quote_sample = b["voices"][0] if b["voices"] else "—"
+        if len(quote_sample) > 30:
+            quote_sample = quote_sample[:28] + "..."
+        bangboo_md.append(
+            f"| {rank_tag} | **{b['name']}** ({b['en_name']}) | {b['syn_icon']} {b['cat_tag']} | `{act_tag}` | `{qte_tag}` | `{talent_tag}` | {quote_sample} |"
+        )
+
+    bangboo_md.append("\n---\n")
+
+    current_group = ""
+    for b in sorted_bangboos:
+        group_title = (
+            "## 一、S 级巅峰战斗邦布机体（22 款全集）\n"
+            if b["rank"] == "S"
+            else (
+                "## 二、A 级实用特化邦布机体（19 款全集）\n"
+                if b["rank"] == "A"
+                else "## 三、特型伴随向导邦布（传奇绳匠机体）\n"
+            )
+        )
+        if group_title != current_group:
+            current_group = group_title
+            bangboo_md.append(group_title)
+
+        bangboo_md.append(f"### {b['name']}（{b['en_name']}）\n")
+        bangboo_md.append("| 机体指标 | 规格参数与配置记录 |")
+        bangboo_md.append("| :--- | :--- |")
+        bangboo_md.append(f"| **官方机体编号 / ID** | `{b['id']}` |")
+        bangboo_md.append(f"| **机体品质档位** | {b['rank_badge']} |")
+        bangboo_md.append(f"| **战术/阵营偏向** | {b['syn_icon']} {b['cat_tag']} |")
+        bangboo_md.append(f"| **战术羁绊激活条件** | `{b['cond_desc']}` |")
+        if b["tarot_name"]:
+            bangboo_md.append(f"| **空洞助战鸣徽** | {b['tarot_name']} |")
+        bangboo_md.append("")
+
+        bangboo_md.append("#### 🤖 机体格言与档案纪事\n")
+        bangboo_md.append(f"> *{b['desc'].replace(chr(10), chr(10) + '> ')}*\n")
+
+        bangboo_md.append("#### ⚡ 核心技能回路\n")
         if b["active_title"] or b["active_des"]:
-            bangboo_md.append(f"### 主动技：{b['active_title']}\n{b['active_des']}\n")
+            bangboo_md.append(f"##### 1. 主动技：{b['active_title']}\n{b['active_des']}\n")
         if b["qte_title"] or b["qte_des"]:
-            bangboo_md.append(f"### 邦布连携技：{b['qte_title']}\n{b['qte_des']}\n")
-        if b["talent_title"] or b["talent_des"]:
-            bangboo_md.append(f"### 专属额外能力：{b['talent_title']}\n{b['talent_des']}\n")
+            bangboo_md.append(f"##### 2. 邦布连携技：{b['qte_title']}\n{b['qte_des']}\n")
+        elif b["rank"] != "SP":
+            bangboo_md.append("##### 2. 邦布连携技：无\n*本机体无独立连携技，专注常态主动技与战术辅助回路。*\n")
+
+        if b["talent_title"] or b["talent_des_lv1"]:
+            bangboo_md.append(f"##### 3. 专属额外能力：{b['talent_title']}")
+            if b["talent_des_lv1"]:
+                bangboo_md.append(f"- **基础触发效果（Lv.1）**：{b['talent_des_lv1']}")
+            if b["talent_des_lv5"] and b["talent_des_lv5"] != b["talent_des_lv1"]:
+                bangboo_md.append(f"- **完全升级效果（Lv.5 满星）**：{b['talent_des_lv5']}")
+            bangboo_md.append("")
+
+        if b["tarot_des"]:
+            bangboo_md.append("#### 🎴 零号空洞助战鸣徽效果\n")
+            bangboo_md.append(f"- **助战鸣徽**：{b['tarot_name']}")
+            bangboo_md.append(f"- **鸣徽增益效果**：{b['tarot_des']}\n")
+
         if b["voices"]:
-            bangboo_md.append("### 邦布语音台词\n")
+            bangboo_md.append("#### 📢 战地语音与萌趣台词\n")
             for vl in b["voices"]:
                 bangboo_md.append(f"- {vl}")
             bangboo_md.append("")
+
+        if b["tactical_tips"]:
+            bangboo_md.append("#### 🧭 空洞实况与战术指引通讯（以太神经同步）\n")
+            for tl in b["tactical_tips"]:
+                bangboo_md.append(f"- {tl}")
+            bangboo_md.append("")
+
         bangboo_md.append("---\n")
     (equip_dir / "03_邦布机体图鉴.md").write_text("\n".join(bangboo_md), encoding="utf-8")
 
@@ -1200,7 +1388,7 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "### 2. 装备文献与造物图鉴 (`lore/equipment/`)",
         "- [01_驱动盘唱片物语](equipment/01_驱动盘唱片物语.md)：全 30 套驱动盘唱片文献、调律属性与 6 重奏分轨物语全集",
         "- [02_音擎档案与题记](equipment/02_音擎档案与题记.md)：全 100 款音擎战术构造、核心改装回路与专属题记名言录全集",
-        "- [03_邦布机体图鉴](equipment/03_邦布机体图鉴.md)：全 35+ 邦布机体格言、技能连携与萌趣战斗台词",
+        "- [03_邦布机体图鉴](equipment/03_邦布机体图鉴.md)：全 42 款邦布机体全景图鉴（22款S级、19款A级与特型向导机体）、机体格言、技能回路、助战鸣徽与萌趣台词",
         "- [04_收藏展架与风味展品](equipment/04_收藏展架与风味展品.md)：录像店货架手办与纪念品风味物语\n",
         "### 3. 绳网论坛与通讯 (`lore/interknot/`)",
         "- [01_委托人任务档案](interknot/01_委托人任务档案.md)：700+ 长篇委托求助信、事件背景与空洞救援记录",

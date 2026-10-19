@@ -46,6 +46,11 @@ def test_extract_lore(tmp_path):
         "Bangboo_ActiveSkill_Des_54004": "制作爱心茶点...",
         "Bangboo_QTE_Title_54004": "午后甜点",
         "Bangboo_QTE_Des_54004": "使用平底锅远程攻击...",
+        "Bangboo_TalentSkill_Title_54004": "贴身管家",
+        "Bangboo_TalentSkill_Des_54004_01": "队伍中存在2名或以上[维多利亚家政]阵营的角色时触发...",
+        "Bangboo_TalentSkill_Des_54004_05": "队伍中存在2名或以上[维多利亚家政]阵营的角色时触发：完全升级...",
+        "TarotCard_1054004_name": "[助战]巴特勒",
+        "TarotCard_1054004_des": "全队能量自动回复提升7.5%...",
         "Tips_5400401": "嗯嗯呢~（请用下午茶~）",
         # Inter-Knot Quest
         "QuestName_10010001": "兔与绳",
@@ -132,4 +137,16 @@ def test_extract_lore(tmp_path):
     assert "全 100 款音擎品质与战术回路速查总览" in engine_doc
     assert "以电为名的剑..." in engine_doc
     assert "电能爆发" in engine_doc
+
+    bangboo_doc = (out_dir / "lore" / "equipment" / "03_邦布机体图鉴.md").read_text(encoding="utf-8")
+    assert "邦布全景机体速查总览表" in bangboo_doc
+    assert "巴特勒" in bangboo_doc
+    assert "Butler" in bangboo_doc
+    assert "茶歇时间" in bangboo_doc
+    assert "午后甜点" in bangboo_doc
+    assert "贴身管家" in bangboo_doc
+    assert "维多利亚家政" in bangboo_doc
+    assert "助战鸣徽" in bangboo_doc
+    assert "嗯嗯呢~（请用下午茶~）" in bangboo_doc
+
 
