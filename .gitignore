@@ -5,3 +5,6 @@ out/
 __pycache__/
 *.pyc
 *.egg-info/
+mcp/target/
+*.zsc
+*.zsc.tmp

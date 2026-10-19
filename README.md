@@ -83,6 +83,20 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m zzz_story extract --refresh --refresh-speakers --out out
 ```
 
+## MCP 服务（给剧情总结 AI 用）
+
+`mcp/` 是一个 Rust 编写的只读 MCP 服务，把上面的产出（主线、补充、设定）变成可检索、可顺读的知识库，
+供 Claude 等模型做章节总结、角色弧线、事件时间线与原文查证。stdio 与 Streamable HTTP 两种传输都支持。
+
+```powershell
+cd mcp
+cargo build --release
+.\target\release\zzz-story-mcp.exe build --data ..\out\zzz_story_3.2.0_chs -o ..\out\zzz_story.zsc
+.\target\release\zzz-story-mcp.exe serve --source ..\out\zzz_story.zsc --http 127.0.0.1:8765
+```
+
+客户端配置 `{"type": "streamable-http", "url": "http://127.0.0.1:8765/mcp"}` 即可使用。工具、部署与架构说明见 [mcp/README.md](mcp/README.md)。
+
 ## 数据来源
 
 - 文本与配置：Gitea 镜像 `https://git.mero.moe/dimbreath/ZenlessData`（3.2.0，优先），备用 GitHub 镜像 `https://github.com/malu-no996/ZenlessData`。除 TextMap 外还使用 PerformTemplateTb、ArchivePerformTemplateTb（剧情回放顺序）、QuestConfigTemplateTb（任务名）、OngoingTipsConfigTemplateTb（关卡内对话说话人）等配置表。
