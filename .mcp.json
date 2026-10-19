@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "InterKnotStory": {
+      "type": "streamable-http",
+      "url": "https://ik.tiwat.cn/v1/story/mcp"
+    }
+  }
+}
