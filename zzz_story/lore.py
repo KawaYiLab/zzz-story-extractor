@@ -132,6 +132,57 @@ CAMP_ID_MAP: dict[int, str] = {
     18: "弗林特工坊",
 }
 
+# Drive Disc tactical category mapping (Suit ID -> (Category, Badge))
+DISC_TACTICAL_CATEGORIES: dict[str, tuple[str, str]] = {
+    # 暴击与爆伤
+    "31000": ("暴击与爆伤", "🎯"),
+    "32700": ("暴击与爆伤", "🎯"),
+    # 攻击与穿透
+    "31100": ("攻击与穿透", "⚔️"),
+    "31400": ("攻击与穿透", "⚔️"),
+    "32800": ("攻击与穿透", "⚔️"),
+    "32900": ("攻击与穿透", "⚔️"),
+    "33300": ("攻击与穿透", "⚔️"),
+    # 失衡与冲击
+    "31200": ("失衡与冲击", "💥"),
+    "33200": ("失衡与冲击", "💥"),
+    # 异常与积蓄
+    "31300": ("异常与积蓄", "🌀"),
+    "31800": ("异常与积蓄", "🌀"),
+    "33000": ("异常与积蓄", "🌀"),
+    "34100": ("异常与积蓄", "🌀"),
+    # 元素属性特化
+    "32200": ("火属性特化", "🔥"),
+    "32300": ("以太属性特化", "🔮"),
+    "32400": ("电属性特化", "⚡"),
+    "32500": ("冰属性特化", "❄️"),
+    "32600": ("物理属性特化", "🗡️"),
+    "33500": ("物理属性特化", "🗡️"),
+    "33600": ("以太属性特化", "🔮"),
+    "33800": ("冰属性特化", "❄️"),
+    "33900": ("风属性特化", "🌪️"),
+    "34000": ("以太属性特化", "🔮"),
+    # 支援与能量
+    "31600": ("能量与支援", "🎵"),
+    "33400": ("能量与支援", "🎵"),
+    # 生存与防御
+    "31500": ("生存与防御", "🛡️"),
+    "31900": ("生存与防御", "🛡️"),
+    "33100": ("生存与防御", "🛡️"),
+    "33700": ("生存与防御", "🛡️"),
+    "34200": ("生存与防御", "🛡️"),
+}
+
+# Drive Disc partition slot metadata (1 to 6)
+SLOT_PARTITION_METADATA: dict[int, tuple[str, str]] = {
+    1: ("I号位（分区1）", "固定基础属性：生命值（Flat HP）"),
+    2: ("II号位（分区2）", "固定基础属性：攻击力（Flat ATK）"),
+    3: ("III号位（分区3）", "固定基础属性：防御力（Flat DEF）"),
+    4: ("IV号位（分区4）", "高级属性：暴击率 / 暴击伤害 / 攻击力% / 防御力% / 生命值% / 异常精通"),
+    5: ("V号位（分区5）", "进阶属性：属性伤害加成（火/冰/电/物/以太/风） / 穿透率 / 攻击力% / 防御力% / 生命值%"),
+    6: ("VI号位（分区6）", "机制属性：能量自动回复 / 冲击力 / 异常掌控 / 攻击力% / 防御力% / 生命值%"),
+}
+
 
 def _clean(raw: str, default: str = "") -> str:
     if not raw:
@@ -547,35 +598,134 @@ def _extract_equipment(tm: TextMap, equip_dir: Path) -> dict[str, int]:
     equip_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Drive Discs (EquipmentSuit_*_story)
-    discs: list[dict[str, str]] = []
+    discs: list[dict[str, Any]] = []
     for k, v in tm.items():
         if k.startswith("EquipmentSuit_") and k.endswith("_name"):
             suit_id = k.split("_")[1]
+            name = _clean(v).strip()
             story = _clean(tm.get(f"EquipmentSuit_{suit_id}_story", ""))
             two_pc = _clean(tm.get(f"EquipmentSuit_{suit_id}_2_des", ""))
             four_pc = _clean(tm.get(f"EquipmentSuit_{suit_id}_4_des", ""))
             tag = _clean(tm.get(f"EquipmentSuit_{suit_id}_Tag", ""))
-            if story:
-                discs.append({
-                    "id": suit_id,
-                    "name": _clean(v),
-                    "story": story,
-                    "two_pc": two_pc,
-                    "four_pc": four_pc,
-                    "tag": tag,
-                })
+            hint = _clean(tm.get(f"EquipmentSuit_{suit_id}_Hint", ""))
+            filter_opt = _clean(tm.get(f"EquipmentSuit_{suit_id}_SuitFilterOption", ""))
 
-    disc_md = ["# 新艾利都驱动盘唱片物语\n"]
-    disc_md.append("> 驱动盘不仅是调节以太适配率的作战插件，更铭刻着旧文明与新艾利都流传的旋律与历史纪实。\n")
-    for d in sorted(discs, key=lambda x: int(x["id"]) if x["id"].isdigit() else 9999):
-        disc_md.append(f"## 《{d['name']}》（编号：{d['id']}）\n")
-        if d["tag"]:
-            disc_md.append(f"**定位特征**：`{d['tag']}`\n")
-        disc_md.append("### 唱片文献与背景纪事\n")
+            if not story:
+                continue
+
+            prefix = suit_id[:3]
+            slots: dict[int, dict[str, str]] = {}
+            for slot in range(1, 7):
+                slot_name = ""
+                slot_des = ""
+                for r in ("4", "3", "2"):
+                    s_name = tm.get(f"Item_Equipment_{prefix}{r}{slot}_name")
+                    s_des = tm.get(f"Item_Equipment_{prefix}{r}{slot}_des")
+                    if s_des:
+                        slot_name = _clean(s_name).strip() if s_name else f"{name}[{slot}]"
+                        slot_des = _clean(s_des)
+                        break
+                if not slot_des:
+                    target_token = f"{name}[{slot}]"
+                    for k_item, v_item in tm.items():
+                        if k_item.startswith("Item_Equipment_") and k_item.endswith("_name"):
+                            if v_item.strip() == target_token or v_item.strip().startswith(target_token):
+                                base_k = k_item[:-5]
+                                fallback_des = tm.get(f"{base_k}_des")
+                                if fallback_des:
+                                    slot_name = _clean(v_item).strip()
+                                    slot_des = _clean(fallback_des)
+                                    break
+                slots[slot] = {
+                    "name": slot_name or f"{name}[{slot}]",
+                    "des": slot_des,
+                }
+
+            cat, cat_icon = DISC_TACTICAL_CATEGORIES.get(
+                suit_id,
+                ("综合战术", "💿"),
+            )
+
+            discs.append({
+                "id": suit_id,
+                "name": name,
+                "story": story,
+                "two_pc": two_pc,
+                "four_pc": four_pc,
+                "tag": tag,
+                "hint": hint,
+                "filter_opt": filter_opt,
+                "category": cat,
+                "cat_icon": cat_icon,
+                "slots": slots,
+            })
+
+    # Sort strictly by integer ID to eliminate ordering bugs
+    discs.sort(key=lambda x: int(x["id"]) if x["id"].isdigit() else 9999)
+
+    disc_md: list[str] = [
+        "# 新艾利都驱动盘唱片物语（全30套调律文献与6重奏分轨物语）\n",
+        "> 驱动盘（Drive Disc）不仅是代理人调节以太适配率的核心作战插件，更铭刻着旧文明遗音与新艾利都流传的旋律纪实。每一套完整的驱动盘都是一张拥有6个分轨曲目的EP黑胶唱片，随着音擎转动共鸣，为代理人注入独特的以太战斗节拍。\n",
+        "## 驱动盘六大分区与属性调律法则\n",
+        "新艾利都音像店（如六分街吟游唱针）将驱动盘规范为六大插槽分区，各自承载不同的调律机制：\n",
+        "| 分区插槽 | 调律定位 | 属性规则与战术倾向 |",
+        "| :--- | :--- | :--- |",
+        "| **I号位（分区1）** | 基础生命 | 固定主属性：生命值（Flat HP） |",
+        "| **II号位（分区2）** | 基础攻击 | 固定主属性：攻击力（Flat ATK） |",
+        "| **III号位（分区3）** | 基础防御 | 固定主属性：防御力（Flat DEF） |",
+        "| **IV号位（分区4）** | 战技倾向 | 随机主属性：暴击率 / 暴击伤害 / 攻击力% / 防御力% / 生命值% / 异常精通 |",
+        "| **V号位（分区5）** | 属性穿透 | 随机主属性：属性伤害加成（火/冰/电/物/以太/风） / 穿透率 / 攻防生% |",
+        "| **VI号位（分区6）** | 核心机制 | 随机主属性：能量自动回复 / 冲击力 / 异常掌控 / 攻防生% |\n",
+        "## 全 30 套驱动盘战术流派与唱片速查总览\n",
+        "| 编号 | 唱片名称 | 战术流派 | 官方定位特征 | 2件套共鸣效果 | 4件套战术机制概要 | 分轨收录 |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+    ]
+
+    for d in discs:
+        four_brief = d["four_pc"].replace("\n", " ")
+        if len(four_brief) > 50:
+            four_brief = four_brief[:48] + "..."
+        disc_md.append(
+            f"| `{d['id']}` | **《{d['name']}》** | {d['cat_icon']} {d['category']} | `{d['tag']}` | {d['two_pc']} | {four_brief} | 6部曲全 |"
+        )
+
+    disc_md.append("\n---\n")
+    disc_md.append("## 驱动盘唱片物语详篇（按官方编号递增排序）\n")
+
+    for d in discs:
+        disc_md.append(f"### 《{d['name']}》（编号：{d['id']}）\n")
+        disc_md.append("| 唱片指标 | 调律文献记录 |")
+        disc_md.append("| :--- | :--- |")
+        disc_md.append(f"| **唱片编号 / ID** | `{d['id']}` |")
+        disc_md.append(f"| **战术流派分类** | {d['cat_icon']} {d['category']} |")
+        disc_md.append(f"| **官方定位特征** | `{d['tag']}` |")
+        if d["filter_opt"]:
+            disc_md.append(f"| **驱动盘检索标签** | `{d['filter_opt']}` |")
+        if d["hint"]:
+            disc_md.append(f"| **调律适用建议** | {d['hint']} |")
+        disc_md.append("")
+
+        disc_md.append("#### 💿 唱片文献与背景纪事\n")
         disc_md.append(f"> {d['story'].replace(chr(10), chr(10) + '> ')}\n")
-        disc_md.append("### 调律共鸣效果\n")
-        disc_md.append(f"- **2件套**：{d['two_pc']}")
-        disc_md.append(f"- **4件套**：{d['four_pc']}\n")
+
+        disc_md.append("#### 🎵 调律共鸣效果\n")
+        disc_md.append(f"- **2件套共鸣**：{d['two_pc']}")
+        disc_md.append(f"- **4件套共鸣**：{d['four_pc']}\n")
+
+        disc_md.append("#### 🎼 六重奏分轨曲目物语（共 6 部曲全集）\n")
+        for slot in range(1, 7):
+            meta = SLOT_PARTITION_METADATA[slot]
+            tr = d["slots"].get(slot, {})
+            tr_name = tr.get("name", f"{d['name']}[{slot}]")
+            tr_des = tr.get("des", "")
+            disc_md.append(f"##### 【第 {slot} 部分曲目】{tr_name}（{meta[0]}）\n")
+            disc_md.append(f"- **分区调律职能**：{meta[1]}")
+            if tr_des:
+                disc_md.append("- **旋律题记与歌谣物语**：\n")
+                disc_md.append(f"> {tr_des.replace(chr(10), chr(10) + '> ')}\n")
+            else:
+                disc_md.append("- **旋律题记**：暂缺\n")
+
         disc_md.append("---\n")
     (equip_dir / "01_驱动盘唱片物语.md").write_text("\n".join(disc_md), encoding="utf-8")
 
@@ -888,7 +1038,7 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "- [11_达识结社与空巡局](agents/11_达识结社与空巡局.md)：维琳娜、诺姆、希格莉德、克拉蕾、洛克茜、蕾米埃尔",
         "- [12_漫游者与特别存在](agents/12_漫游者与特别存在.md)：哲、铃、流浪猫小黑等\n",
         "### 2. 装备文献与造物图鉴 (`lore/equipment/`)",
-        "- [01_驱动盘唱片物语](equipment/01_驱动盘唱片物语.md)：全 30 套驱动盘唱片背景故事与调律属性",
+        "- [01_驱动盘唱片物语](equipment/01_驱动盘唱片物语.md)：全 30 套驱动盘唱片文献、调律属性与 6 重奏分轨物语全集",
         "- [02_音擎档案与题记](equipment/02_音擎档案与题记.md)：全 105 款音擎专属构造说明、被动效果与题记引言",
         "- [03_邦布机体图鉴](equipment/03_邦布机体图鉴.md)：全 35+ 邦布机体格言、技能连携与萌趣战斗台词",
         "- [04_收藏展架与风味展品](equipment/04_收藏展架与风味展品.md)：录像店货架手办与纪念品风味物语\n",

@@ -35,6 +35,9 @@ def test_extract_lore(tmp_path):
         "EquipmentSuit_31000_2_des": "暴击率+8%",
         "EquipmentSuit_31000_4_des": "攻击力提升9%",
         "EquipmentSuit_31000_Tag": "暴击率提升",
+        "EquipmentSuit_31000_SuitFilterOption": "啄木鸟电音-[暴击]",
+        "Item_Equipment_31041_name": "啄木鸟电音[1]",
+        "Item_Equipment_31041_des": "记录着《啄木鸟电音》第一部分曲目的驱动盘...",
         # Bangboo
         "Bangboo_Name_54004": "巴特勒",
         "Bangboo_Name_en_54004": "Butler",
@@ -116,3 +119,11 @@ def test_extract_lore(tmp_path):
     assert "快充模式" in agent_doc
     assert "德玛拉电池Ⅱ型" in agent_doc
     assert "汉堡是最好吃的食物。" in agent_doc
+
+    disc_doc = (out_dir / "lore" / "equipment" / "01_驱动盘唱片物语.md").read_text(encoding="utf-8")
+    assert "《啄木鸟电音》" in disc_doc
+    assert "全 30 套驱动盘战术流派与唱片速查总览" in disc_doc
+    assert "六重奏分轨曲目物语" in disc_doc
+    assert "第 1 部分曲目" in disc_doc
+    assert "记录着《啄木鸟电音》第一部分曲目的驱动盘..." in disc_doc
+
