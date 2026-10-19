@@ -2496,22 +2496,256 @@ def _extract_glossary(tm: TextMap, gloss_dir: Path) -> dict[str, int]:
 def _extract_street(tm: TextMap, street_dir: Path) -> dict[str, int]:
     street_dir.mkdir(parents=True, exist_ok=True)
 
-    # Ambient dialogues
-    street_lines: list[str] = []
-    for k, v in tm.items():
-        if k.startswith("PasserBy_BubbleStory_") or k.startswith("PasserBy_Bubble_"):
-            cleaned = _clean(v)
-            if cleaned and len(cleaned) > 10 and not cleaned.startswith("LAYOUT"):
-                if cleaned not in street_lines:
-                    street_lines.append(cleaned)
+    district_configs = [
+        (
+            "01",
+            "六分街（Sixth Street）",
+            "Random Play 录像店门前、锦鲤面馆、盒玩具店、涡轮改装店与 141 便利店",
+            "狡兔屋、面馆乔普师傅、141店员、街坊邻里与录像店顾客",
+            ["Chapter00", "Chapter01", "SixthStreet", "1001_01", "Store", "MainCityStreet"],
+        ),
+        (
+            "02",
+            "光映广场（Lumina Square）",
+            "繁华商业步行街、天桥观景台、HIA 协会大厅、治安局分署、404 Livehouse 与演艺大厅",
+            "HIA调查员、治安官、潮牌店长、逛街市民与演艺乐迷",
+            ["FortuneSquare", "FortuneHIA", "FortuneNEPS", "404ERROR", "Concert", "SuibianTemple", "Hand", "ReverbArena"],
+        ),
+        (
+            "03",
+            "黑雁工地旧址（Brant Street）",
+            "机械施工现场、工友集结地、重机营地、地下管网与废弃站台",
+            "白祇重工工程队、施工工人、机械师与安全监理",
+            ["Chapter02", "BrantStreet", "MegaRobot"],
+        ),
+        (
+            "04",
+            "芭莱大厦前广场（Ballet Twins）",
+            "喷泉广场、双子大厦名流商圈、艺术长廊与高雅观景台",
+            "艺术名流、芭莱双子访客、摄影师与都会名媛",
+            ["Chapter03", "BalletTwins"],
+        ),
+        (
+            "05",
+            "外环·野火镇（Blazewood）",
+            "机车党荒野客栈、外环集市、仙人掌戈壁、加油站与狂飙赛道",
+            "卡吕冬之子、荒野开拓者、机车骑手与集市客商",
+            ["Chapter04", "OuterRing", "Blazewood"],
+        ),
+        (
+            "06",
+            "索恩区·罗斯凯利法（Roscaelifer）",
+            "索恩大都会、历史行政名区、轨道交通枢纽与都会繁华街巷",
+            "大都会通勤族、轻轨乘客、索恩名流与市政公职人员",
+            ["Roscaelifer", "Subway"],
+        ),
+        (
+            "07",
+            "卫非地半岛（Whitfield）",
+            "澄辉坪聚落、辉瓷工坊、索恩海湾海角与泽尼希航天城旧址",
+            "辉瓷手艺人、半岛渔民、海钓客、水手与海湾度假市民",
+            ["Whitfield", "WhitFiled", "HiddenReef", "Port", "UltimateAngler"],
+        ),
+        (
+            "08",
+            "云岿山怪啖街区（Yum Cha Sin）",
+            "随缘道场、古法茶馆、方士集聚地、山门集市与怪啖街坊",
+            "云岿方士、茶客、茶肆掌柜、香客与求道者",
+            ["YumChaSin"],
+        ),
+        (
+            "09",
+            "斯科特哨站（Scott Outpost）",
+            "零号空洞前沿指挥所、防卫军哨所、补给站与调查员集结地",
+            "对空六课前沿哨兵、防卫军军官、资深调查员与物资军需官",
+            ["Zero", "Outpost", "Scott"],
+        ),
+        (
+            "10",
+            "街头邦布众生相（Street Bangboos）",
+            "新艾利都街头巷尾、各商铺门口、工地角落与野生流浪点",
+            "巡警布、建筑布、快递布、招揽布与野生流浪邦布",
+            ["BangBoo", "BangbooUnderGround", "BangbooRabbit"],
+        ),
+    ]
 
-    s_md = ["# 新艾利都市井众生相与街区传闻\n"]
-    s_md.append("> 六分街、光映广场、黑雁工地与芭莱大厦前，市民、商贩、流浪动物与路人邦布的日常环境对话。\n")
-    for line in street_lines[:1000]:
-        s_md.append(f"- 🗣️ {line}")
+    def match_district(k: str) -> str:
+        k_lower = k.lower()
+        if "bangboo" in k_lower:
+            return "10"
+        for d_id, _, _, _, kw_list in district_configs:
+            if d_id == "10":
+                continue
+            for kw in kw_list:
+                if kw.lower() in k_lower:
+                    return d_id
+        return "11"
+
+    # 1. Parse PasserByChat_
+    chat_dict: dict[str, dict] = {}
+    for k, v in tm.items():
+        if k.startswith("PasserByChat_"):
+            parts = k.split("_")
+            if len(parts) >= 4:
+                prefix = parts[1]
+                conv_id = parts[2]
+                suffix = "_".join(parts[3:])
+                conv_key = f"{prefix}_{conv_id}"
+                if conv_key not in chat_dict:
+                    chat_dict[conv_key] = {"prefix": prefix, "id": conv_id, "dialogues": [], "names": {}}
+                if suffix.startswith("Name"):
+                    cleaned_name = _clean(v)
+                    if cleaned_name:
+                        chat_dict[conv_key]["names"][suffix] = cleaned_name
+                else:
+                    cleaned_text = _clean(v)
+                    if cleaned_text and len(cleaned_text) > 1 and not cleaned_text.startswith("LAYOUT"):
+                        chat_dict[conv_key]["dialogues"].append((suffix, cleaned_text))
+
+    chats_by_dist: dict[str, list[dict]] = {d[0]: [] for d in district_configs}
+    chats_by_dist["11"] = []
+
+    total_chat_lines = 0
+    for conv_key, cdata in chat_dict.items():
+        cdata["dialogues"].sort(key=lambda x: x[0])
+        cleaned_dialogues = []
+        seen_seq = set()
+        for seq, text in cdata["dialogues"]:
+            base_seq = seq.rstrip("FMfm")
+            if base_seq in seen_seq:
+                continue
+            seen_seq.add(base_seq)
+            cleaned_dialogues.append((seq, text))
+        cdata["dialogues"] = cleaned_dialogues
+        if cleaned_dialogues:
+            total_chat_lines += len(cleaned_dialogues)
+            dist_id = match_district(conv_key)
+            chats_by_dist[dist_id].append(cdata)
+
+    for dist_id in chats_by_dist:
+        chats_by_dist[dist_id].sort(key=lambda x: (x["prefix"], x["id"]))
+
+    # 2. Parse Bubbles
+    bubbles_by_dist: dict[str, list[tuple[str, str]]] = {d[0]: [] for d in district_configs}
+    bubbles_by_dist["11"] = []
+    all_bubble_texts: set[str] = set()
+
+    for k, v in tm.items():
+        is_bubble = (
+            k.startswith("PasserBy_BubbleStory_")
+            or k.startswith("PasserBy_Bubble_")
+            or k.startswith("PasserByBubble_")
+            or k.startswith("PasserBy_BubbleNpc_")
+            or k.startswith("BubbleByChat_")
+            or k.startswith("StoreBubble_")
+            or ("Bubble" in k and "PasserBy" in k)
+        )
+        if is_bubble and not k.startswith("PasserByChat_"):
+            cleaned = _clean(v)
+            if cleaned and len(cleaned) > 5 and not cleaned.startswith("LAYOUT"):
+                if cleaned not in all_bubble_texts:
+                    all_bubble_texts.add(cleaned)
+                    dist_id = match_district(k)
+                    bubbles_by_dist[dist_id].append((k, cleaned))
+
+    for dist_id in bubbles_by_dist:
+        bubbles_by_dist[dist_id].sort(key=lambda x: x[0])
+
+    # 3. Generate Markdown
+    s_md: list[str] = [
+        "# 新艾利都市井众生相与街区传闻全集\n",
+        "> 本文献库全景收录新艾利都各大生活街区、商业步行街、工业营地、外环荒野与前沿哨所的全部市民闲聊、情境对话与漫步环境气泡。严格按新艾利都 10 大核心地标街区及都会特别区域划篇归档，保序排列。\n",
+        "## 🏙️ 新艾利都全景街区众生相速查总览表\n",
+        "| 序号 | 街区 / 场景代号 | 核心地标与市井风貌 | 核心对话主体 | 市井逸闻收录数 |",
+        "|:---:|:---|:---|:---|:---:|",
+    ]
+
+    for dist_id, dist_name, dist_desc, dist_actors, _ in district_configs:
+        n_chats = len(chats_by_dist[dist_id])
+        n_clines = sum(len(c["dialogues"]) for c in chats_by_dist[dist_id])
+        n_bubbles = len(bubbles_by_dist[dist_id])
+        total_d = n_clines + n_bubbles
+        if n_chats > 0 and n_bubbles > 0:
+            count_str = f"**{total_d:,}** 条（情境对话 {n_chats} 组 / 环境气泡 {n_bubbles:,} 条）"
+        elif n_chats > 0:
+            count_str = f"**{total_d:,}** 条（情境对话 {n_chats} 组）"
+        else:
+            count_str = f"**{total_d:,}** 条（环境气泡 {n_bubbles:,} 条）"
+        s_md.append(f"| {dist_id} | {dist_name} | {dist_desc} | {dist_actors} | {count_str} |")
+
+    c11 = len(chats_by_dist["11"])
+    clines11 = sum(len(c["dialogues"]) for c in chats_by_dist["11"])
+    b11 = len(bubbles_by_dist["11"])
+    total_11 = clines11 + b11
+    if total_11 > 0:
+        count_str_11 = f"**{total_11:,}** 条（情境对话 {c11} 组 / 环境气泡 {b11:,} 条）" if c11 > 0 else f"**{total_11:,}** 条（环境气泡 {b11:,} 条）"
+        s_md.append(f"| 11 | 都会特别展演、庆典赛事与市井杂咏 | 都会特别巡游舞台、节日庆典广场与街头即兴秀场 | 庆典游客、即兴街头艺人与都会闲逛者 | {count_str_11} |")
+
+    s_md.append("\n---\n")
+
+    # Detailed sections
+    for dist_id, dist_name, dist_desc, dist_actors, _ in district_configs:
+        chats = chats_by_dist[dist_id]
+        bubbles = bubbles_by_dist[dist_id]
+        if not chats and not bubbles:
+            continue
+
+        s_md.append(f"## 第 {dist_id} 卷 · {dist_name}\n")
+        s_md.append(f"> **街区定位**：{dist_desc}。  \n> **核心对话主体**：{dist_actors}。\n")
+
+        if chats:
+            s_md.append("### 一、街区情境对话与市井逸事\n")
+            for cdata in chats:
+                names_list = list(cdata["names"].values())
+                if names_list:
+                    speakers_str = "、".join(names_list)
+                    topic = f"{speakers_str} 的街头见闻"
+                else:
+                    speakers_str = "街坊市民 / 过路行人"
+                    topic = "街角琐语与邻里闲谈"
+
+                s_md.append(f"#### 📍 逸事 {cdata['prefix']}_{cdata['id']} · {topic}\n")
+                s_md.append(f"- 👥 **登场主体 / 闲聊街坊**：{speakers_str}")
+                s_md.append("- 💬 **情境对话实录**：")
+                for idx, (_, text) in enumerate(cdata["dialogues"], 1):
+                    s_md.append(f"  {idx}. {text}")
+                s_md.append("\n---\n")
+
+        if bubbles:
+            section_title = "### 二、街头漫步环境气泡与路人闲言\n" if chats else "### 街头漫步环境气泡与路人闲言\n"
+            s_md.append(section_title)
+            for _, b_text in bubbles:
+                s_md.append(f"- 🗣️ {b_text}")
+            s_md.append("\n---\n")
+
+    if total_11 > 0:
+        chats_11 = chats_by_dist["11"]
+        bubbles_11 = bubbles_by_dist["11"]
+        s_md.append("## 第 11 卷 · 都会特别展演、庆典赛事与市井杂咏\n")
+        s_md.append("> **街区定位**：都会特别巡游舞台、节日庆典广场与街头即兴秀场。  \n> **核心对话主体**：庆典游客、即兴街头艺人与都会闲逛者。\n")
+        if chats_11:
+            s_md.append("### 一、街区情境对话与市井逸事\n")
+            for cdata in chats_11:
+                names_list = list(cdata["names"].values())
+                speakers_str = "、".join(names_list) if names_list else "街坊市民 / 过路行人"
+                topic = f"{speakers_str} 的街头见闻" if names_list else "街角琐语与邻里闲谈"
+                s_md.append(f"#### 📍 逸事 {cdata['prefix']}_{cdata['id']} · {topic}\n")
+                s_md.append(f"- 👥 **登场主体 / 闲聊街坊**：{speakers_str}")
+                s_md.append("- 💬 **情境对话实录**：")
+                for idx, (_, text) in enumerate(cdata["dialogues"], 1):
+                    s_md.append(f"  {idx}. {text}")
+                s_md.append("\n---\n")
+        if bubbles_11:
+            section_title = "### 二、街头漫步环境气泡与路人闲言\n" if chats_11 else "### 街头漫步环境气泡与路人闲言\n"
+            s_md.append(section_title)
+            for _, b_text in bubbles_11:
+                s_md.append(f"- 🗣️ {b_text}")
+            s_md.append("\n---\n")
+
     (street_dir / "01_街区路人与市井闲聊.md").write_text("\n".join(s_md), encoding="utf-8")
 
-    return {"lore_street_lines": len(street_lines)}
+    total_extracted_lines = total_chat_lines + len(all_bubble_texts)
+    return {"lore_street_lines": total_extracted_lines}
 
 
 def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
@@ -2547,7 +2781,7 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "- [01_空洞与以太规则](glossary/01_空洞与以太规则.md)：主线全章节历程纪事、以太物理规则、新艾利都生存法则与全量以太侵蚀病理图鉴",
         "- [02_空洞鸣徽与古物预言](glossary/02_空洞鸣徽与古物预言.md)：零号空洞全 25 大流派鸣徽考据、古物预言与代理人专属共鸣密藏\n",
         "### 6. 街区众生相与市井传闻 (`lore/street/`)",
-        "- [01_街区路人与市井闲聊](street/01_街区路人与市井闲聊.md)：六分街、光映广场等街区路人环境对话\n",
+        "- [01_街区路人与市井闲聊](street/01_街区路人与市井闲聊.md)：全 10 大核心地标街区（六分街、光映广场、黑雁工地、芭莱大厦、野火镇、索恩区、卫非地半岛、云岿山、斯科特哨站与街头邦布）全量市井逸事对话与漫步环境气泡全集\n",
         "## 统计概要\n",
         f"- **收录代理人**：{stats.get('lore_agents', 0)} 位",
         f"- **收录驱动盘唱片**：{stats.get('lore_discs', 0)} 套",
@@ -2558,5 +2792,6 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         f"- **收录短信对话**：{stats.get('lore_messages', 0)} 条",
         f"- **收录旧文明影片**：{stats.get('lore_movies', 0)} 部（影评 {stats.get('lore_movie_comments', 0)} 条）",
         f"- **收录空洞词条**：{stats.get('lore_tips', 0)} 条，**鸣徽古物**：{stats.get('lore_tarots', 0)} 个",
+        f"- **收录市井街区逸闻**：{stats.get('lore_street_lines', 0)} 条",
     ]
     (lore_dir / "README.md").write_text("\n".join(lines), encoding="utf-8")

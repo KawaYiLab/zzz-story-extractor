@@ -218,3 +218,9 @@ def test_extract_lore(tmp_path):
     assert "零号空洞鸣徽流派全景速查总览表" in tarot_doc
     assert "[出战]鲨牙布" in tarot_doc
     assert "深海捕食者的鸣徽记忆" in tarot_doc
+
+    street_doc = (out_dir / "lore" / "street" / "01_街区路人与市井闲聊.md").read_text(encoding="utf-8")
+    assert "新艾利都市井众生相与街区传闻全集" in street_doc
+    assert "新艾利都全景街区众生相速查总览表" in street_doc
+    assert "六分街（Sixth Street）" in street_doc
+    assert "今天六分街的天气真好啊~" in street_doc
