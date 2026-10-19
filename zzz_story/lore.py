@@ -2214,56 +2214,280 @@ def _extract_cinema(tm: TextMap, cinema_dir: Path) -> dict[str, int]:
     return {"lore_movies": len(movies), "lore_movie_comments": total_comments}
 
 
+CHAPTER_GUIDES: dict[str, tuple[str, str]] = {
+    "1000": ("S1-CHAPTER 000", "狡兔屋初遇法厄同，录像店与空洞深潜契约启动"),
+    "1001": ("S1-CHAPTER 001", "猫又潜入狡兔屋，引申出白祇重工机械谜案"),
+    "1002": ("S1-CHAPTER 002", "黑雁工地深潜调查，珂蕾妲与白祇重工重铸荣耀"),
+    "1003": ("S1-CHAPTER 002 INTERLUDE", "治安局刑侦特勤组出动，朱鸢与青衣执勤协作"),
+    "1004": ("S1-CHAPTER 003", "芭莱大厦幽灵事件，维多利亚家政优雅执事行动"),
+    "1005": ("S1-CHAPTER 004", "外环荒野霸主争霸赛，卡吕冬之子燃擎狂飙"),
+    "1006": ("S1-CHAPTER 005", "对空六课全员集结，星见雅与月城柳星流斩夜"),
+    "1007": ("S1-CHAPTER 006", "零号空洞旧都旧忆，揭开以太灾变历史沉寂"),
+    "1008": ("S1-CHAPTER 007", "深渊共鸣决战，法厄同与全阵营并肩突破死局"),
+    "1009": ("S2-CHAPTER 001", "云岿山怪啖屋启幕，仪玄、福福与瞬光古门修行"),
+    "1010": ("S2-CHAPTER 002", "索恩海域潮汐异动，以太深潜探秘远洋古遗迹"),
+    "1011": ("S2-CHAPTER 003", "良夜前哨暗涌，面对以太侵蚀狂澜的抗争"),
+    "1012": ("S2-CHAPTER 004", "虚数回廊梦境追忆，探寻旧文明未竟的愿景"),
+    "1013": ("S2-CHAPTER 005", "空洞活性极限攀升，深渊裂隙的决绝探查"),
+    "1014": ("S2-CHAPTER 006", "微光引渡，迷途以骸与人类灵魂的救赎"),
+    "1015": ("S2-INTERLUDE", "反舌鸟天籁复苏，耀嘉音与伊芙琳舞台奏鸣"),
+    "1016": ("S2-EPILOGUE", "日落之时余晖反照，新政局与新势力的暗潮"),
+    "1017": ("S2-EPILOGUE", "破晓前的沉静准备，新旧时代的交替节点"),
+    "1018": ("S3-CHAPTER 001", "潜意识深潜调查，意识流离者的归途寻觅"),
+    "1019": ("S3-CHAPTER 002", "与旧都执念的永别，文明重构的崭新里程碑"),
+    "1020": ("S3-CHAPTER 003", "深层身世揭秘，宿命纠葛的最终解封"),
+    "2001": ("SP-2001", "简·杜伪装深潜，山狮帮与刑侦特勤组博弈"),
+    "2002": ("SP-2002", "对空六课赛博网络训练，虚拟与现实的双重试炼"),
+    "2003": ("SP-2003", "耀嘉音巡演特别纪事，聚光灯与以太战场的合鸣"),
+}
+
+EMERGENCY_MEDS: dict[str, str] = {
+    "1000602": "[战救]急救输液管",
+    "1000605": "[战救]军用硬化针",
+    "1000606": "[战救]肾上腺素气雾剂",
+    "1000607": "[战救]双管薄荷提神剂",
+    "1000608": "[战救]应急保命剂",
+}
+
+
 def _extract_glossary(tm: TextMap, gloss_dir: Path) -> dict[str, int]:
     gloss_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. World Tips & Hollow Rules
-    tips: list[str] = []
-    lore_keywords = ["以太", "空洞", "侵蚀", "治安", "绳匠", "盗洞客", "防卫军", "赫利俄斯", "新艾利都", "旧都", "邦布", "音擎"]
+    # =========================================================================
+    # Part 1: Main Story Chapters & Timeline (01_空洞与以太规则.md)
+    # =========================================================================
+    chapters: list[tuple[str, str, str, str]] = []
     for k, v in tm.items():
+        if k.startswith("MainStoryChapterNumber_"):
+            cid = k.replace("MainStoryChapterNumber_", "")
+            name_k = f"MainStoryChapterName_{cid}"
+            num = _clean(v)
+            name = _clean(tm.get(name_k, "")).replace("\xa0", " ")
+            guide = CHAPTER_GUIDES.get(cid, (num, "主线剧情深入推进"))[1]
+            if name and name != "未完待续…":
+                chapters.append((cid, num, name, guide))
+
+    for k, v in tm.items():
+        if k.startswith("SpecialEpisodesChapterName_"):
+            cid = k.replace("SpecialEpisodesChapterName_", "")
+            name = _clean(v).replace("\xa0", " ")
+            guide = CHAPTER_GUIDES.get(cid, (f"SP-{cid}", "独家视界代理人特别篇"))[1]
+            chapters.append((cid, f"SP-{cid}", f"独家视界·{name}", guide))
+
+    # Fallback if no MainStoryChapterNumber found (e.g. minimal mock test data)
+    if not chapters:
+        for k, v in tm.items():
+            if k.startswith("ChapterTipsMain_"):
+                cid = k.replace("ChapterTipsMain_", "")
+                cleaned_val = _clean(v).replace("\xa0", " ")
+                if "临时" not in cleaned_val and "OB-" not in cleaned_val:
+                    guide = CHAPTER_GUIDES.get(cid, (f"幕次 {cid}", "官方剧情纪事"))[1]
+                    chapters.append((cid, f"幕次 {cid}", cleaned_val, guide))
+
+    chapters.sort(key=lambda x: int(x[0]) if x[0].isdigit() else 99999)
+
+    # =========================================================================
+    # Part 2: World Tips & Loading Knowledge (01_空洞与以太规则.md)
+    # =========================================================================
+    tips: list[str] = []
+    seen_tips: set[str] = set()
+
+    # 1. Canonical loading screen tips
+    for k, v in sorted(tm.items()):
+        if k.startswith("LoadingTips_"):
+            cleaned = _clean(v)
+            if cleaned and len(cleaned) > 15 and cleaned not in seen_tips:
+                if not any(token in cleaned for token in ["点击[", "按键", "滑动翻页", "拖拽画面", "请重试"]):
+                    seen_tips.add(cleaned)
+                    tips.append(cleaned)
+
+    # 2. Key worldbuilding tips from Tips_
+    lore_keywords = ["以太", "空洞", "侵蚀", "治安", "绳匠", "盗洞客", "防卫军", "赫利俄斯", "新艾利都", "旧都", "邦布", "音擎", "秽息"]
+    for k, v in sorted(tm.items()):
         if k.startswith("Tips_") and len(v) > 20:
-            if not any(token in v for token in ["LAYOUT_", "Action:UI", "IconMap:", "点击[", "按键"]):
+            if not any(token in v for token in ["LAYOUT_", "Action:UI", "IconMap:", "点击[", "按键", "tab", "Tab", "切远程", "禁用中"]):
                 if any(w in v for w in lore_keywords):
                     cleaned = _clean(v)
-                    if cleaned and cleaned not in tips:
+                    if cleaned and cleaned not in seen_tips:
+                        seen_tips.add(cleaned)
                         tips.append(cleaned)
 
-    # Main chapter titles & tips
-    ch_tips: list[tuple[str, str]] = []
-    for k, v in tm.items():
-        if k.startswith("ChapterTipsMain_"):
-            cid = k.replace("ChapterTipsMain_", "")
-            ch_tips.append((cid, _clean(v)))
+    # =========================================================================
+    # Part 3: Erosion Symptoms / Corruption Pathology (01_空洞与以太规则.md)
+    # =========================================================================
+    curses: list[dict[str, str]] = []
+    seen_curse_stories: set[str] = set()
+    for k, v in sorted(tm.items()):
+        if k.startswith("Curse_") and k.endswith("_story"):
+            cid = k.split("_")[1]
+            story = _clean(v)
+            name = _clean(tm.get(f"Curse_{cid}_name", ""))
+            des = _clean(tm.get(f"Curse_{cid}_des", ""))
+            if story and name and story not in seen_curse_stories:
+                seen_curse_stories.add(story)
+                curses.append({
+                    "id": cid,
+                    "name": name,
+                    "des": des,
+                    "story": story,
+                })
 
+    curses.sort(key=lambda x: int(x["id"]) if x["id"].isdigit() else 99999)
+
+    # -------------------------------------------------------------------------
+    # Render 01_空洞与以太规则.md
+    # -------------------------------------------------------------------------
     t_md = ["# 新艾利都世界观百科与空洞规则\n"]
-    t_md.append("> 涵盖新艾利都官方条例、以太物理规则、空洞灾害评级与历史纪事。\n")
-    t_md.append("## 核心章节历程纪事\n")
-    for cid, title in sorted(ch_tips, key=lambda x: int(x[0]) if x[0].isdigit() else 9999):
-        t_md.append(f"- **幕次 {cid}**：{title}")
-    t_md.append("\n## 空洞调查与以太生存法则（Tips 典藏）\n")
-    for tip in sorted(tips):
-        t_md.append(f"- {tip}")
+    t_md.append("> 涵盖新艾利都官方条例、主线全章节编年史、以太物理规则、空洞灾害评级与全量以太侵蚀病理图鉴。\n")
+
+    # Section 1: Chapter Timeline
+    t_md.append("## 📜 第一辑：核心主线历程与章节纪事全景\n")
+    t_md.append("| 幕次编号 | 官方分幕代号 | 主线章节名称 | 剧情主轴导读 |")
+    t_md.append("| :---: | :--- | :--- | :--- |")
+    for cid, num, title, guide in chapters:
+        t_md.append(f"| {cid} | **{num}** | 《{title}》 | {guide} |")
+    t_md.append("")
+
+    # Section 2: World Rules & Living Guidelines
+    t_md.append("## 🌐 第二辑：新艾利都世界观典藏与空洞生存法则\n")
+    if tips:
+        for tip in tips:
+            t_md.append(f"- 💡 {tip}")
+        t_md.append("")
+
+    # Section 3: Erosion Symptoms
+    if curses:
+        t_md.append("## ☣️ 第三辑：零号空洞以太侵蚀症状全景病理图鉴\n")
+        t_md.append("> 小队在空洞内遭遇压力过载（压力值累计达 100）后将爆发随机侵蚀症状，对生理、神经机能与战术协同产生深远异变。\n")
+        t_md.append("| 症状编号 | 侵蚀症状名称 | 异变病理手记摘要 | 空洞实战异变效应 |")
+        t_md.append("| :---: | :--- | :--- | :--- |")
+        for c in curses:
+            short_story = c["story"].replace("\n", " ")
+            if len(short_story) > 26:
+                short_story = short_story[:24] + "..."
+            short_des = c["des"].replace("\n", " ")
+            if len(short_des) > 26:
+                short_des = short_des[:24] + "..."
+            t_md.append(f"| #{c['id']} | **{c['name']}** | {short_story} | {short_des} |")
+        t_md.append("\n### 全量侵蚀症状详录\n")
+        for c in curses:
+            t_md.append(f"#### 【{c['name']}】（编号：#{c['id']}）\n")
+            t_md.append(f"- 🔬 **病理异变物语**：\n> *“{c['story']}”*\n")
+            if c["des"]:
+                t_md.append(f"- ⚠️ **空洞侵蚀效应**：{c['des']}\n")
+            t_md.append("---\n")
+
     (gloss_dir / "01_空洞与以太规则.md").write_text("\n".join(t_md), encoding="utf-8")
 
-    # 2. Tarot Cards / Hollow Resonances (TarotCard_*)
+    # =========================================================================
+    # Part 4: Resoniums & Relics (02_空洞鸣徽与古物预言.md)
+    # =========================================================================
     tarots: list[dict[str, str]] = []
-    for k, v in tm.items():
+    for k, v in sorted(tm.items()):
         if k.startswith("TarotCard_") and k.endswith("_story"):
             tid = k.split("_")[1]
-            name = _clean(tm.get(f"TarotCard_{tid}_name", f"鸣徽 #{tid}"))
+            if not tid.isdigit():
+                continue
+            name = _clean(tm.get(f"TarotCard_{tid}_name", tm.get(f"TarotCard_{tid}_Name", f"鸣徽 #{tid}")))
+            if tid in EMERGENCY_MEDS and name.startswith("鸣徽 #"):
+                name = EMERGENCY_MEDS[tid]
             des = _clean(tm.get(f"TarotCard_{tid}_des", ""))
             story = _clean(v)
-            if story:
-                tarots.append({"name": name, "des": des, "story": story})
+            if story and name not in ("鸣徽信息", "无货"):
+                tarots.append({"id": tid, "name": name, "des": des, "story": story})
 
-    tc_md = ["# 零号空洞鸣徽考据与古物预言\n"]
-    tc_md.append("> 零号空洞深处凝结的以太鸣徽。其上依附着旧文明探险者的执念与神秘预言。\n")
-    for tc in tarots:
-        tc_md.append(f"## 【{tc['name']}】\n")
-        tc_md.append(f"> {tc['story']}\n")
-        if tc["des"]:
-            tc_md.append(f"**共鸣效能**：{tc['des']}\n")
-        tc_md.append("---\n")
+    # Sort strictly by numeric ID ascending
+    tarots.sort(key=lambda x: int(x["id"]) if x["id"].isdigit() else 99999)
+
+    # Group into canonical genres
+    genre_groups: dict[str, list[dict[str, str]]] = {}
+    for t in tarots:
+        m = re.match(r"\[(.*?)\]", t["name"])
+        g = m.group(1) if m else "代理人专属共鸣古物"
+        genre_groups.setdefault(g, []).append(t)
+
+    tc_md = ["# 零号空洞鸣徽考据与古物预言全集\n"]
+    tc_md.append("> 零号空洞深处凝结的以太鸣徽与旧文明珍稀古物。其上依附着旧文明探险者的执念、神秘预言与强大的以太战术增益。\n")
+
+    # Resonium Genres Overview Table
+    tc_md.append("## 🔮 零号空洞鸣徽流派全景速查总览表\n")
+    tc_md.append("| 序号 | 核心流派分类 | 鸣徽收录总数 | 战术增益倾向 | 代表性鸣徽 / 预言古物 |")
+    tc_md.append("| :---: | :--- | :---: | :--- | :--- |")
+
+    canonical_genre_order = [
+        ("引燃", "火属性灼烧爆发与斗志累积"),
+        ("冻结", "冰属性冻结碎冰与霜寒控制"),
+        ("感电", "电属性感电传导与落雷增伤"),
+        ("强袭", "物理伤害穿透与破甲重击"),
+        ("以太", "以太能量侵蚀与活性共鸣"),
+        ("侵蚀", "侵蚀机制抗性与负面状态转化"),
+        ("烈性", "极限样本强效增幅"),
+        ("暴击", "暴击率与暴击伤害极境强化"),
+        ("决斗", "失衡值快速积蓄与失衡易伤倍率"),
+        ("护盾", "护盾生成保护与反伤壁垒"),
+        ("闪避", "极限闪避强化与反击追加伤害"),
+        ("能量", "能量自动回复与终结技快速充能"),
+        ("顽强", "生命上限恢复与防御减伤"),
+        ("诡术", "奇术障眼法与概率增益触发"),
+        ("命破", "贯穿防御与绝对贯通伤害"),
+        ("锋御", "防反招架与锋芒坚壁"),
+        ("支援", "后台快速支援与连携技增幅"),
+        ("协助", "协同作战与宠物随行助力"),
+        ("契合", "代理人羁绊战术流派深度共鸣"),
+        ("研究", "空洞科研探索与资源高效转化"),
+        ("通用", "全队通用战斗效能强化"),
+        ("空洞", "空洞行进机制与齿轮硬币理财"),
+        ("战救", "战场应急医疗与生命体征强化"),
+        ("礼包码", "旧文明娱乐彩蛋与光耀馈赠"),
+        ("出战", "邦布前场连携与主动战技"),
+        ("助战", "邦布后场支援与能量被动"),
+        ("代理人专属共鸣古物", "专属身世信物与觉醒预言"),
+    ]
+
+    rendered_genres = set()
+    idx = 1
+    for g_name, g_desc in canonical_genre_order:
+        if g_name in genre_groups:
+            items = genre_groups[g_name]
+            sample = items[0]["name"]
+            tc_md.append(f"| {idx:02d} | **【{g_name}】** | {len(items)} 款 | {g_desc} | {sample} |")
+            rendered_genres.add(g_name)
+            idx += 1
+
+    for g_name, items in sorted(genre_groups.items()):
+        if g_name not in rendered_genres:
+            sample = items[0]["name"]
+            tc_md.append(f"| {idx:02d} | **【{g_name}】** | {len(items)} 款 | 专属战法古物 | {sample} |")
+            idx += 1
+
+    tc_md.append("")
+
+    # Detailed entries by genre
+    g_section_idx = 1
+    for g_name, g_desc in canonical_genre_order:
+        if g_name in genre_groups:
+            items = genre_groups[g_name]
+            tc_md.append(f"## {g_section_idx}. 【{g_name}】战术鸣徽与古物（共 {len(items)} 款）\n")
+            tc_md.append(f"> 战术增益倾向：{g_desc}\n")
+            for t in items:
+                tc_md.append(f"### 【{t['name']}】（编号：#{t['id']}）\n")
+                tc_md.append(f"- 📜 **古物预言 / 档案考据**：\n> *“{t['story']}”*\n")
+                if t["des"]:
+                    tc_md.append(f"- ⚡ **共鸣效能**：{t['des']}\n")
+                tc_md.append("---\n")
+            g_section_idx += 1
+
+    for g_name, items in sorted(genre_groups.items()):
+        if g_name not in rendered_genres:
+            tc_md.append(f"## {g_section_idx}. 【{g_name}】战术鸣徽与古物（共 {len(items)} 款）\n")
+            for t in items:
+                tc_md.append(f"### 【{t['name']}】（编号：#{t['id']}）\n")
+                tc_md.append(f"- 📜 **古物预言 / 档案考据**：\n> *“{t['story']}”*\n")
+                if t["des"]:
+                    tc_md.append(f"- ⚡ **共鸣效能**：{t['des']}\n")
+                tc_md.append("---\n")
+            g_section_idx += 1
+
     (gloss_dir / "02_空洞鸣徽与古物预言.md").write_text("\n".join(tc_md), encoding="utf-8")
 
     return {"lore_tips": len(tips), "lore_tarots": len(tarots)}
@@ -2320,8 +2544,8 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "### 4. Random Play 录像店影音档案 (`lore/cinema/`)",
         "- [01_旧文明电影与影评](cinema/01_旧文明电影与影评.md)：录像店全部 17 部经典影片长梗概、题材流派、原声台词选摘与全量顾客大众影评\n",
         "### 5. 新艾利都世界观百科与空洞规则 (`lore/glossary/`)",
-        "- [01_空洞与以太规则](glossary/01_空洞与以太规则.md)：主线章节历程纪事、以太活性、侵蚀机制与治安法规",
-        "- [02_空洞鸣徽与古物预言](glossary/02_空洞鸣徽与古物预言.md)：零号空洞鸣徽考据与古物渊源\n",
+        "- [01_空洞与以太规则](glossary/01_空洞与以太规则.md)：主线全章节历程纪事、以太物理规则、新艾利都生存法则与全量以太侵蚀病理图鉴",
+        "- [02_空洞鸣徽与古物预言](glossary/02_空洞鸣徽与古物预言.md)：零号空洞全 25 大流派鸣徽考据、古物预言与代理人专属共鸣密藏\n",
         "### 6. 街区众生相与市井传闻 (`lore/street/`)",
         "- [01_街区路人与市井闲聊](street/01_街区路人与市井闲聊.md)：六分街、光映广场等街区路人环境对话\n",
         "## 统计概要\n",

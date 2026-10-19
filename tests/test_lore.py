@@ -207,3 +207,14 @@ def test_extract_lore(tmp_path):
     assert "英雄没有逃跑的理由" in cinema_doc
     assert "比利" in cinema_doc
     assert "满分神作！" in cinema_doc
+
+    gloss_doc = (out_dir / "lore" / "glossary" / "01_空洞与以太规则.md").read_text(encoding="utf-8")
+    assert "新艾利都世界观百科与空洞规则" in gloss_doc
+    assert "核心主线历程与章节纪事全景" in gloss_doc
+    assert "序章 生意×诡异×道义" in gloss_doc
+
+    tarot_doc = (out_dir / "lore" / "glossary" / "02_空洞鸣徽与古物预言.md").read_text(encoding="utf-8")
+    assert "零号空洞鸣徽考据与古物预言全集" in tarot_doc
+    assert "零号空洞鸣徽流派全景速查总览表" in tarot_doc
+    assert "[出战]鲨牙布" in tarot_doc
+    assert "深海捕食者的鸣徽记忆" in tarot_doc
