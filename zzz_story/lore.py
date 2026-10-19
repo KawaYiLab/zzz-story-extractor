@@ -132,6 +132,90 @@ CAMP_ID_MAP: dict[int, str] = {
     18: "弗林特工坊",
 }
 
+# Canonical SMS Camp ordering for chapter presentation
+CAMP_SMS_ORDER: list[tuple[int, str]] = [
+    (10, "狡兔屋"),
+    (12, "白祇重工"),
+    (13, "维多利亚家政"),
+    (14, "奥波勒斯小队"),
+    (15, "刑侦特勤组"),
+    (16, "卡吕冬之子"),
+    (17, "对空六课"),
+    (18, "天琴座"),
+    (19, "幻影怪盗"),
+    (20, "云岿山"),
+    (21, "怪啖屋"),
+    (22, "达识结社"),
+    (23, "反舌鸟"),
+    (24, "妄想天使"),
+    (25, "外务筹策局"),
+    (26, "都市秩序部"),
+    (27, "空巡局"),
+    (28, "弗林特工坊"),
+]
+
+# Canonical playable and story agents for SMS and Trust Memos (SenderNotes)
+# code: (cid, name, camp_name, camp_code)
+CANONICAL_SMS_AGENTS: dict[int, tuple[str, str, str, int]] = {
+    1: ("101011", "安比", "狡兔屋", 10),
+    2: ("101021", "猫又", "狡兔屋", 10),
+    3: ("101031", "妮可", "狡兔屋", 10),
+    4: ("141041", "「11号」", "奥波勒斯小队", 14),
+    5: ("211051", "伊德海莉", "怪啖屋", 21),
+    6: ("131061", "可琳", "维多利亚家政", 13),
+    7: ("161071", "凯撒", "卡吕冬之子", 16),
+    8: ("101081", "比利", "狡兔屋", 10),
+    9: ("171091", "星见雅", "对空六课", 17),
+    10: ("121101", "珂蕾妲", "白祇重工", 12),
+    11: ("121111", "安东", "白祇重工", 12),
+    12: ("121121", "本", "白祇重工", 12),
+    13: ("171131", "苍角", "对空六课", 17),
+    14: ("131141", "莱卡恩", "维多利亚家政", 13),
+    15: ("161151", "露西", "卡吕冬之子", 16),
+    16: ("161161", "莱特", "卡吕冬之子", 16),
+    17: ("161171", "柏妮思", "卡吕冬之子", 16),
+    18: ("121181", "格莉丝", "白祇重工", 12),
+    19: ("131191", "艾莲", "维多利亚家政", 13),
+    20: ("171201", "悠真", "对空六课", 17),
+    21: ("131211", "丽娜", "维多利亚家政", 13),
+    22: ("171221", "月城柳", "对空六课", 17),
+    24: ("151241", "朱鸢", "刑侦特勤组", 15),
+    25: ("151251", "青衣", "刑侦特勤组", 15),
+    26: ("151261", "简", "刑侦特勤组", 15),
+    27: ("151271", "赛斯", "刑侦特勤组", 15),
+    28: ("161281", "派派", "卡吕冬之子", 16),
+    29: ("191291", "雨果", "幻影怪盗", 19),
+    30: ("141301", "奥菲丝& 「鬼火」", "奥波勒斯小队", 14),
+    31: ("181311", "耀嘉音", "天琴座", 18),
+    32: ("181321", "伊芙琳", "天琴座", 18),
+    33: ("191331", "薇薇安", "幻影怪盗", 19),
+    34: ("221341", "照", "达识结社", 22),
+    35: ("161351", "波可娜", "卡吕冬之子", 16),
+    36: ("141361", "「扳机」", "奥波勒斯小队", 14),
+    37: ("201371", "仪玄", "云岿山", 20),
+    39: ("201391", "橘福福", "云岿山", 20),
+    40: ("211401", "爱丽丝", "怪啖屋", 21),
+    41: ("211411", "浮波柚叶", "怪啖屋", 21),
+    42: ("201421", "潘引壶", "云岿山", 20),
+    43: ("201431", "叶瞬光", "云岿山", 20),
+    44: ("211441", "狛野真斗", "怪啖屋", 21),
+    45: ("211451", "卢西娅", "怪啖屋", 21),
+    46: ("141461", "「席德」", "奥波勒斯小队", 14),
+    47: ("221471", "般岳", "达识结社", 22),
+    48: ("221481", "琉音", "达识结社", 22),
+    49: ("231491", "千夏", "反舌鸟", 23),
+    50: ("231501", "爱芮", "反舌鸟", 23),
+    51: ("231511", "南宫羽", "反舌鸟", 23),
+    52: ("241521", "希希芙", "妄想天使", 24),
+    54: ("221541", "普罗米娅", "达识结社", 22),
+    56: ("251561", "维琳娜", "外务筹策局", 25),
+    57: ("251571", "诺姆", "外务筹策局", 25),
+    58: ("261581", "蕾米埃尔", "都市秩序部", 26),
+    59: ("271591", "希格莉德", "空巡局", 27),
+    61: ("281611", "克拉蕾", "弗林特工坊", 28),
+    62: ("281621", "洛克茜", "弗林特工坊", 28),
+}
+
 # Drive Disc tactical category mapping (Suit ID -> (Category, Badge))
 DISC_TACTICAL_CATEGORIES: dict[str, tuple[str, str]] = {
     # 暴击与爆伤
@@ -1626,30 +1710,297 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
 
     (knot_dir / "01_委托人任务档案.md").write_text("\n".join(q_md), encoding="utf-8")
 
-    # 3. Private Messages (Message_*)
-    threads: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    # 3. Private Messages & Instant Messaging (Message_*)
+    threads: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
     for k, v in tm.items():
-        if k.startswith("Message_"):
-            mid = k.replace("Message_", "")
-            text = _clean(v)
-            if not text or "占位" in text:
-                continue
-            # Thread ID is first 7 digits if len >= 7, else prefix
-            thread_id = mid[:7] if len(mid) >= 7 else mid[:4]
-            threads[thread_id].append((mid, text))
+        if not k.startswith("Message_"):
+            continue
+        mid = k[len("Message_"):]
+        if (
+            mid.startswith(("NPC", "Role_", "Group_", "Item_", "MultiMessage_", "Quest", "Reply", "SendButton"))
+            or k.endswith(("_name", "_Tips", "_Name"))
+        ):
+            continue
+        if "_" in mid:
+            tid, seq = mid.rsplit("_", 1)
+        elif mid.isdigit() and len(mid) >= 5:
+            tid, seq = mid[:-2], mid[-2:]
+        else:
+            continue
+        text = _clean(v)
+        if not text or "占位" in text:
+            continue
+        threads[tid].append((seq, text, v))
+
+    # Extract dynamic Trust Memos (SenderNotes) from TextMap if present
+    trust_memos: dict[str, tuple[str, str, str]] = {}
+    for k, v in tm.items():
+        if k.startswith("SenderNote1_"):
+            cid = k[len("SenderNote1_"):]
+            n1 = _clean(tm.get(f"SenderNote1_{cid}", ""))
+            n2 = _clean(tm.get(f"SenderNote2_{cid}", ""))
+            n3 = _clean(tm.get(f"SenderNote3_{cid}", ""))
+            if n1 or n2 or n3:
+                trust_memos[cid] = (n1, n2, n3)
+
+    def _get_agent_code(tid_str: str) -> int | None:
+        if tid_str.startswith("40") and len(tid_str) >= 4 and tid_str[2:4].isdigit():
+            return int(tid_str[2:4])
+        if tid_str.startswith("4") and len(tid_str) >= 3 and tid_str[1:3].isdigit():
+            return int(tid_str[1:3])
+        if tid_str.startswith("601") and len(tid_str) >= 5 and tid_str[3:5].isdigit():
+            return int(tid_str[3:5])
+        if tid_str.startswith("2000"):
+            return 1
+        if tid_str.startswith(("20010", "20011", "20012")):
+            return 3
+        if tid_str.startswith(("20020", "20021", "20022")):
+            return 8
+        if tid_str.startswith(("20030", "20031", "20032")):
+            return 2
+        if tid_str.startswith(("20040", "20041", "20042")):
+            return 4
+        if tid_str.startswith("2005"):
+            return 6
+        if tid_str.startswith("2054"):
+            return 10
+        if tid_str.startswith("2056"):
+            return 21
+        if tid_str.startswith("2057"):
+            return 25
+        if tid_str.startswith("2058"):
+            return 17
+        if tid_str.startswith("1007"):
+            return 7
+        if tid_str.startswith(("10101", "10102", "10103", "10104")):
+            return 2
+        if tid_str.startswith(("1017", "1040")):
+            return 15
+        if tid_str.startswith("1027"):
+            return 27
+        if tid_str.startswith("1270"):
+            return 31
+        if tid_str == "122002":
+            return 40
+        if tid_str == "131001":
+            return 56
+        if "1261" in tid_str:
+            return 26
+        return None
+
+    def _resolve_street_contact(tid_str: str) -> tuple[str, str, str]:
+        tname = _clean(tm.get(f"Message_{tid_str}_name", ""))
+        if tname:
+            return (tname, "街区通讯", tname)
+        if tid_str in ("9708",) or tid_str.startswith(("9900", "6004")):
+            return ("法厄同（哲 / 铃）", "兄妹日常", "哲与铃的手持终端私信")
+        if tid_str in ("9701", "10201", "10202", "10203", "10204") or tid_str.startswith(("3020", "9010", "9020", "9030")):
+            return ("「牧羊人」", "独立情报中介", "「牧羊人」的情报专线")
+        if tid_str in ("9702", "9705", "9706", "9707"):
+            return ("柳林庄贵宾专线", "都市文旅", "柳林庄度假庄园贵宾通知")
+        if tid_str == "9703":
+            return ("淘金寻宝客", "空洞淘金", "C41 空洞物资箱开箱联络")
+        if tid_str.startswith("10200"):
+            return ("恩佐", "六分街商户", "恩佐的盒玩改装工坊")
+        if tid_str.startswith(("1050", "105000")):
+            return ("「咔嚓仔」", "六分街名人", "咔嚓仔的空洞街拍联络")
+        if tid_str.startswith(("1060", "106000", "1090", "109000", "6200")):
+            return ("塔维斯", "六分街商户", "「141」杂货店供货联络")
+        if tid_str.startswith(("3010", "301000")):
+            return ("艾尔菲", "六分街商户", "「吟游唱针」黑胶唱片推荐")
+        if tid_str.startswith(("9901", "3099")):
+            return ("空洞调查协会（HIA）", "官方机构", "HIA 特许独立调查员服务专线")
+        if tid_str.startswith("8001"):
+            return ("新艾利都治安局", "官方机构", "治安局个体经营资质管理通知")
+        if tid_str.startswith("7000"):
+            return ("「启明星」", "委托平台", "启明星特别拉力委托推荐")
+        if tid_str.startswith("1025"):
+            return ("喵吉长官", "治安协理", "喵吉长官的热心市民问候")
+        if tid_str.startswith("1080"):
+            return ("神秘特工", "都市传说", "TOPS 特工伪装通讯")
+        if tid_str.startswith("1220"):
+            return ("黑市奖券买家", "黑市交易", "神秘奖券收购联络")
+        if tid_str.startswith("1230"):
+            return ("防卫军指挥部", "官方机构", "莱姆尼安空洞避险广播")
+        if tid_str.startswith("1990"):
+            return ("汀曼大师", "六分街商户", "咖啡店新品鉴赏邀约")
+        if tid_str.startswith("2099"):
+            return ("神选者", "都市异闻", "午夜怪信·残月审判")
+        if tid_str.startswith(("604", "610", "612", "651")):
+            return ("录像店熟客", "街区市井", "Random Play 录像店日常沟通")
+        return (f"市井联系人 #{tid_str}", "市井日常", f"街区通讯频段 #{tid_str}")
+
+    def _format_msg_line(seq_str: str, text_str: str, raw_str: str, contact_str: str) -> str:
+        is_phaethon = False
+        if "{M#" in raw_str or "{F#" in raw_str:
+            is_phaethon = True
+        elif raw_str.startswith(("[回复]", "回复：", "【回复】")):
+            is_phaethon = True
+
+        ct = clean_text(raw_str)
+        if ct.variants and len(ct.variants) > 1 and "M" in ct.variants and "F" in ct.variants:
+            var_m = ct.variants["M"].replace("\n", " ").strip()
+            var_f = ct.variants["F"].replace("\n", " ").strip()
+            return f"> 📱 **[{seq_str}] 法厄同（哲 / 铃）**：哲：「{var_m}」 / 铃：「{var_f}」\n"
+
+        clean_val = text_str.replace("\n", " ").strip()
+        if is_phaethon:
+            return f"> 📱 **[{seq_str}] 法厄同（哲 / 铃）**：{clean_val}\n"
+        else:
+            return f"> 💬 **[{seq_str}] {contact_str}**：{clean_val}\n"
+
+    # Categorize threads
+    agent_threads: dict[int, list[str]] = defaultdict(list)
+    client_threads: list[str] = []
+    street_threads: list[str] = []
+
+    for tid in sorted(threads.keys(), key=lambda t: (0, int(t)) if t.isdigit() else (1, t)):
+        code = _get_agent_code(tid)
+        if code is not None and code in CANONICAL_SMS_AGENTS:
+            agent_threads[code].append(tid)
+            continue
+
+        poster = _clean(tm.get(f"Poster_{tid}", ""))
+        if poster or (len(tid) == 4 and tid.isdigit() and int(tid) in range(1000, 3000)):
+            client_threads.append(tid)
+            continue
+
+        street_threads.append(tid)
+
+    # Sort threads deterministically
+    client_threads.sort(key=lambda t: (0, int(t)) if t.isdigit() else (1, t))
+    street_threads.sort(key=lambda t: (0, int(t)) if t.isdigit() else (1, t))
 
     msg_md = ["# 绳网私信与手机即时通讯记录\n"]
-    msg_md.append("> 法厄同个人手持终端中的短信与私信聊天记录，收录代理人、委托人与治安官的日常通讯与八卦吐槽。\n")
-    msg_count = 0
-    for tid in sorted(threads.keys()):
+    msg_md.append(
+        "> 法厄同个人手持终端（敲敲 / Knock Knock）中的短信与私信聊天记录，全量收录代理人日常通讯、专属信托手记、绳网委托人后续跟进、街区市井闲谈与特色多方群聊。\n"
+    )
+
+    # Executive Overview Table
+    msg_md.append("## 📱 绳网即时通讯与通讯录全景速查总览表\n")
+    msg_md.append("| 频段编号 | 通讯对象 / 标题 | 身份类别 / 阵营 | 消息数量 | 交流内容导语 / 开场白 |")
+    msg_md.append("| :--- | :--- | :--- | :--- | :--- |")
+
+    # Table rows: Chapter 1 -> Chapter 2 -> Chapter 3
+    for camp_code, camp_name in CAMP_SMS_ORDER:
+        camp_agent_codes = [c for c, info in CANONICAL_SMS_AGENTS.items() if info[3] == camp_code]
+        camp_agent_codes.sort(key=lambda c: int(CANONICAL_SMS_AGENTS[c][0]))
+        for code in camp_agent_codes:
+            cid, aname, _, _ = CANONICAL_SMS_AGENTS[code]
+            tids = agent_threads.get(code, [])
+            tids.sort(key=lambda t: (0, int(t)) if t.isdigit() else (1, t))
+            for tid in tids:
+                lines = threads[tid]
+                m_sorted = sorted(lines, key=lambda x: x[0])
+                first_text = m_sorted[0][1].replace("\n", " ").replace("|", "—") if m_sorted else "—"
+                snippet = first_text[:28] + ("..." if len(first_text) > 28 else "")
+                tname = _clean(tm.get(f"Message_{tid}_name", ""))
+                title = tname if tname else snippet
+                msg_md.append(f"| `#{tid}` | **{aname}** · {title} | {camp_name}（代理人通讯） | {len(lines)} 条 | {snippet} |")
+
+    for tid in client_threads:
         lines = threads[tid]
-        if len(lines) < 2:
+        m_sorted = sorted(lines, key=lambda x: x[0])
+        first_text = m_sorted[0][1].replace("\n", " ").replace("|", "—") if m_sorted else "—"
+        snippet = first_text[:28] + ("..." if len(first_text) > 28 else "")
+        poster = _clean(tm.get(f"Poster_{tid}", ""))
+        cname = poster if poster else f"委托人 #{tid}"
+        quest = _clean(tm.get(f"Quest_{tid}", ""))
+        title = f"《{quest}》跟进" if quest else snippet
+        msg_md.append(f"| `#{tid}` | **{cname}** · {title} | 绳网业务委托 | {len(lines)} 条 | {snippet} |")
+
+    for tid in street_threads:
+        lines = threads[tid]
+        m_sorted = sorted(lines, key=lambda x: x[0])
+        first_text = m_sorted[0][1].replace("\n", " ").replace("|", "—") if m_sorted else "—"
+        snippet = first_text[:28] + ("..." if len(first_text) > 28 else "")
+        cname, id_cat, title = _resolve_street_contact(tid)
+        msg_md.append(f"| `#{tid}` | **{cname}** · {title} | {id_cat} | {len(lines)} 条 | {snippet} |")
+
+    msg_md.append("\n---\n")
+
+    msg_count = 0
+
+    # Chapter 1: Playable Agents & Trust Memos
+    msg_md.append("## 第一辑：代理人专属日常通讯与信托手记\n")
+    for camp_code, camp_name in CAMP_SMS_ORDER:
+        camp_agent_codes = [c for c, info in CANONICAL_SMS_AGENTS.items() if info[3] == camp_code]
+        camp_agent_codes.sort(key=lambda c: int(CANONICAL_SMS_AGENTS[c][0]))
+        has_content = any(c in agent_threads or CANONICAL_SMS_AGENTS[c][0] in trust_memos for c in camp_agent_codes)
+        if not has_content:
             continue
-        msg_md.append(f"## 对话频段 #{tid}\n")
-        for mid, text in sorted(lines, key=lambda x: x[0]):
-            msg_md.append(f"> 💬 **[{mid}]** {text}\n")
-            msg_count += 1
-        msg_md.append("---\n")
+
+        msg_md.append(f"### 🏛️ {camp_name}\n")
+        for code in camp_agent_codes:
+            cid, aname, _, _ = CANONICAL_SMS_AGENTS[code]
+            has_memos = cid in trust_memos
+            tids = agent_threads.get(code, [])
+            tids.sort(key=lambda t: (0, int(t)) if t.isdigit() else (1, t))
+            if not has_memos and not tids:
+                continue
+
+            msg_md.append(f"#### 💬 {aname}（{camp_name}）\n")
+            if has_memos:
+                memo1, memo2, memo3 = trust_memos[cid]
+                m1_clean = re.sub(r"^对.+?的印象：?\s*", "", memo1).strip().replace("\n", "\n> ")
+                m2_clean = memo2.strip().replace("\n", "\n> ")
+                m3_clean = memo3.strip().replace("\n", "\n> ")
+                msg_md.append(f"> 📝 **法厄同信托手记（对{aname}的印象）**\n>")
+                if m1_clean:
+                    msg_md.append(f"> **第一阶段**：{m1_clean}\n>")
+                if m2_clean:
+                    msg_md.append(f"> **第二阶段**：{m2_clean}\n>")
+                if m3_clean:
+                    msg_md.append(f"> **第三阶段**：{m3_clean}\n")
+                msg_md.append("\n")
+
+            for tid in tids:
+                lines = threads[tid]
+                m_sorted = sorted(lines, key=lambda x: x[0])
+                first_text = m_sorted[0][1].replace("\n", " ").strip() if m_sorted else ""
+                tname = _clean(tm.get(f"Message_{tid}_name", ""))
+                title = tname if tname else (first_text[:24] + ("..." if len(first_text) > 24 else ""))
+                msg_md.append(f"##### 频段 #{tid} · {title}\n")
+                for seq, text, raw in m_sorted:
+                    msg_md.append(_format_msg_line(seq, text, raw, aname))
+                    msg_count += 1
+                msg_md.append("---\n")
+
+    # Chapter 2: Inter-Knot Commission Clients
+    if client_threads:
+        msg_md.append("## 第二辑：绳网委托人后续跟进与业务联络\n")
+        for tid in client_threads:
+            lines = threads[tid]
+            m_sorted = sorted(lines, key=lambda x: x[0])
+            first_text = m_sorted[0][1].replace("\n", " ").strip() if m_sorted else ""
+            poster = _clean(tm.get(f"Poster_{tid}", ""))
+            quest = _clean(tm.get(f"Quest_{tid}", ""))
+            cname = poster if poster else f"委托人 #{tid}"
+            title = f"《{quest}》跟进" if quest else (first_text[:24] + ("..." if len(first_text) > 24 else ""))
+            msg_md.append(f"### 频段 #{tid} · {cname} · {title}\n")
+            if poster or quest:
+                p_label = f"`{poster}`" if poster else "—"
+                q_label = f"《{quest}》" if quest else "—"
+                msg_md.append(f"> 📋 **委托档案关联**：发帖人 {p_label} ｜ 委托任务 {q_label}\n\n")
+            for seq, text, raw in m_sorted:
+                msg_md.append(_format_msg_line(seq, text, raw, cname))
+                msg_count += 1
+            msg_md.append("---\n")
+
+    # Chapter 3: Street & Group Chats
+    if street_threads:
+        msg_md.append("## 第三辑：街区市井通讯与特色多方群聊\n")
+        for tid in street_threads:
+            lines = threads[tid]
+            m_sorted = sorted(lines, key=lambda x: x[0])
+            cname, id_cat, title = _resolve_street_contact(tid)
+            msg_md.append(f"### 频段 #{tid} · {cname} · {title}\n")
+            msg_md.append(f"> 🏷️ **通讯类别**：{id_cat}\n\n")
+            for seq, text, raw in m_sorted:
+                msg_md.append(_format_msg_line(seq, text, raw, cname))
+                msg_count += 1
+            msg_md.append("---\n")
+
     (knot_dir / "02_绳网私信与手机短信.md").write_text("\n".join(msg_md), encoding="utf-8")
 
     return {"lore_quests": len(consolidated) + len(forum_posts), "lore_messages": msg_count}

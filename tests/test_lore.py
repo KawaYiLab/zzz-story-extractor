@@ -71,6 +71,9 @@ def test_extract_lore(tmp_path):
         "Comment1_1001": "你该不是故意在秀吧...",
         "Commentator1_1001": "空洞旅人",
         # Message
+        "SenderNote1_161071": "对凯撒的印象：\n · 豪爽仗义的霸主，骑着重型摩托风驰电掣。",
+        "SenderNote2_161071": " · 偶尔会写错别字，但绝不影响她的大姐头威严。",
+        "SenderNote3_161071": " · 无论何时都是卡吕冬之子最可靠的后盾！",
         "Message_100700701": "绳匠，今天有空吗？",
         "Message_100700702": "野火镇的集市要开始了！",
         # Cinema
@@ -183,5 +186,12 @@ def test_extract_lore(tmp_path):
     assert "妮可·德玛拉" in knot_doc
     assert "这就是绳匠" in knot_doc
 
-
-
+    sms_doc = (out_dir / "lore" / "interknot" / "02_绳网私信与手机短信.md").read_text(encoding="utf-8")
+    assert "绳网即时通讯与通讯录全景速查总览表" in sms_doc
+    assert "第一辑：代理人专属日常通讯与信托手记" in sms_doc
+    assert "卡吕冬之子" in sms_doc
+    assert "凯撒" in sms_doc
+    assert "法厄同信托手记（对凯撒的印象）" in sms_doc
+    assert "豪爽仗义的霸主" in sms_doc
+    assert "1007007" in sms_doc
+    assert "野火镇的集市要开始了！" in sms_doc
