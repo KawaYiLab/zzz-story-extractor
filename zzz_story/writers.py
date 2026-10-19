@@ -85,6 +85,7 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
 
     current_chapter = None
     current_scene = None
+    current_quest = None
     opt_buffer: list[dict] = []
 
     def flush_options() -> None:
@@ -105,6 +106,7 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
             flush_options()
             current_chapter = chapter
             current_scene = None
+            current_quest = None
             label = record.get("chapter_label") or chapter
             chunks.append("")
             chunks.append(f"# {label}（{chapter}）")
@@ -113,6 +115,13 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
         if scene_key != current_scene:
             flush_options()
             current_scene = scene_key
+            quest = record.get("quest_name") if record.get("family") == "GalGame" else None
+            if quest != current_quest:
+                current_quest = quest
+                if quest:
+                    chunks.append("")
+                    chunks.append(f"### 任务：{quest}")
+                    chunks.append("")
             ch = record.get("chapter") or ""
             sc = record.get("scene") or ""
             key = (ch, record.get("family"), sc)

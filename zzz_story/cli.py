@@ -34,15 +34,9 @@ def _build_parser() -> argparse.ArgumentParser:
     extract_parser.add_argument("--refresh-speakers", action="store_true", help="rebuild speaker cache")
     extract_parser.add_argument("--no-speakers", action="store_true", help="skip per-line speaker extraction")
     extract_parser.add_argument("--require-speakers", type=float, default=None, metavar="RATIO", help="fail if voice speaker coverage is below RATIO (0..1)")
-    extract_parser.add_argument("--protagonist", choices=["M", "F", "BOTH"], default="F", help="protagonist variant (default: F)")
     extract_parser.add_argument("--format", default="jsonl,txt", help="comma separated: jsonl,txt,csv")
     extract_parser.add_argument("--no-supplement", action="store_true", help="skip Comic/CS supplement text")
     extract_parser.add_argument("--no-dedupe", action="store_true", help="keep duplicate lines")
-    extract_parser.add_argument(
-        "--keep-branches",
-        action="store_true",
-        help="keep both male/female protagonist branches instead of canonicalizing",
-    )
     extract_parser.add_argument(
         "--no-lore",
         action="store_true",
@@ -156,11 +150,9 @@ def main(argv: list[str] | None = None) -> int:
             refresh_speakers=args.refresh_speakers,
             no_speakers=args.no_speakers,
             require_speakers=args.require_speakers,
-            protagonist=args.protagonist,
             formats=args.format,
             include_supplement=not args.no_supplement,
             dedupe=not args.no_dedupe,
-            canonical_gender=not args.keep_branches,
             limit=args.limit,
             include_lore=not getattr(args, "no_lore", False),
         )

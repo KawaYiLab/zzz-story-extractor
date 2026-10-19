@@ -14,7 +14,9 @@
 | `manifest.json` | 数据版本、来源哈希、计数、本地游戏版本 |
 | `coverage.json` | 说话人覆盖率、未解析别名、缺失文本、去重统计 |
 
-实测 3.2.0 结果：约 46,500 条主线台词，20+ 章节；有 voiceKey 的台词说话人覆盖率约 **95.6%**。旁白、无配音选项、未解析 NPC 允许 `speaker=null`，并在 `coverage.json` 中单独统计。
+实测 3.2.0 结果：45,376 条主线台词，20+ 章节；其中 32,931 条带说话人（Perform voiceKey 解析 21,842 条、探索提示配置补 3,795 条、头像名与场景推断补足其余）。有 voiceKey 的台词说话人覆盖率 **100%**。旁白、无配音选项、未解析 NPC 允许 `speaker=null`，并在 `coverage.json` 中单独统计。
+
+每章内部按内容类型分块排列（GalGame 主线 → 主线聊天 → 聊天 → 气泡 → 关卡内对话等）；GalGame 场景按游戏内“剧情回放”档案的官方顺序排列，并按官方任务名分节。类型之间的时间交错关系在公开数据中不存在，不做臆测。
 
 ## 安装
 
@@ -62,9 +64,6 @@ python -m venv .venv
 # 只处理前 200 句，方便调试
 .\.venv\Scripts\python.exe -m zzz_story extract --limit 200 --out out\sample
 
-# 主角性别分支：F（铃，默认）/ M（哲）/ BOTH（两版都输出）
-.\.venv\Scripts\python.exe -m zzz_story extract --protagonist BOTH --out out\both
-
 # 额外输出 CSV（UTF-8 BOM，方便 Excel）
 .\.venv\Scripts\python.exe -m zzz_story extract --format jsonl,txt,csv --out out\csv
 
@@ -86,7 +85,7 @@ python -m venv .venv
 
 ## 数据来源
 
-- 文本与配置：Gitea 镜像 `https://git.mero.moe/dimbreath/ZenlessData`（3.2.0，优先），备用 GitHub 镜像 `https://github.com/malu-no996/ZenlessData`。
+- 文本与配置：Gitea 镜像 `https://git.mero.moe/dimbreath/ZenlessData`（3.2.0，优先），备用 GitHub 镜像 `https://github.com/malu-no996/ZenlessData`。除 TextMap 外还使用 PerformTemplateTb、ArchivePerformTemplateTb（剧情回放顺序）、QuestConfigTemplateTb（任务名）、OngoingTipsConfigTemplateTb（关卡内对话说话人）等配置表。
 - 本地游戏：自动探测 `D:\米哈游\miHoYo Launcher\games\ZenlessZoneZero Game`、HoYoPlay 常见目录和注册表；也可用 `--game-dir`。
 - 说话人：读取本地游戏的资源目录块和 17 个 Perform block，解析 `dialogueKey` 与 `externalVoiceKey/voiceKey`，再用 AvatarBase + 英文 TextMap 把内部别名映射成中文名。
 - 缓存默认位于 `data/cache/3.2.0/`。
@@ -120,10 +119,11 @@ python -m venv .venv
 
 说明：
 
-- `speaker_source`：`voice`（voiceKey 解析）/ `scene_alias`（场景名单推断）/ `scene_name`（单角色场景兜底）/ `none`。
+- `speaker_source`：`voice`（voiceKey 解析）/ `avatar`（Perform 节点头像名）/ `tips`（探索提示配置，主要是关卡内对话）/ `scene_alias`（场景名单推断）/ `scene_name`（单角色场景兜底）/ `none`。
+- `quest_name`：GalGame 场景所属的官方任务名（来自剧情回放档案 + 任务配置），不属于任何任务时为 `null`。
 - `speaker_confidence`：1.0（AvatarBase/英文名精确映射）、0.6（场景别名推断）、0.4（单名兜底）、0（未解析）。
-- `text_variants`：原文同时包含男/女主角分支且两版不同时才有值；默认 `text` 是女主人公（铃）版本。
-- `line_type`：有说话人时为 `dialogue`，否则为 `unknown`（不再强行把无配音行标成旁白）。
+- `text_variants`：原文同时包含男/女主角分支且两版不同时才有值；`text` 固定为男主（哲）版本，只提取男主视角。女主（铃）作为 NPC（妹妹）出现在台词中。
+- `line_type`：`dialogue`（有说话人）/ `option`（玩家选项）/ `narration`（场景有说话人数据，但这一行没有）/ `unknown`（有配音但没解析出说话人，或整个场景缺说话人数据，如 Bubble、Ongoing 系列）。
 - `scene_speakers`：该场景 `_Name_*` 提供的角色名单，已去掉“选项”“旁白”等非角色项。
 
 ## 范围与限制
@@ -135,6 +135,8 @@ python -m venv .venv
   - 测试/占位表 `Chapter020`、`Chapter080`、`PortChapter110` 以及 `MainChat_2_*` 已排除。
 - 说话人只对“有 voiceKey 的台词”计算覆盖率；聊天、旁白、无配音选项本来就没有 voiceKey，允许为空。
 - 部分 NPC 的内部别名和英文名对不上，会被列为未解析别名；不会凭空猜测。
+- 只提取男主（哲）视角：以 `F` 结尾的女主分支键、女主版本的重复台词、以及含“师妹/铃小姐”等女主称呼且存在男主对应版本的台词都会被移除；“师弟/哲先生”这类男主称呼以及称呼潘引壶等 NPC 为“师弟”的台词全部保留。
+- 去重只合并主角双分支留下的重复行（两套分支段落、相邻重复）；NPC 在同一场景重复说的短句（如“……”）会保留。
 - 章节标签是 3.2.0 的内置映射；新版本出现未知 token 时保留原 token 并推导标签，不会丢数据。
 - 游戏文本版权归米哈游所有；本工具只用于本地个人研究，请勿分发提取出的游戏文本。
 

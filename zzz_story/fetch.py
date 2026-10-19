@@ -44,6 +44,12 @@ REQUIRED_FILES = [
     "TextMap/TextMap_ENTemplateTb.json",
     "TextMap/TextMap_ENOverwriteTemplateTb.json",
     "FileCfg/PerformTemplateTb.json",
+    # Official story-replay archive: GalGame scene order and quest grouping.
+    "FileCfg/ArchivePerformTemplateTb.json",
+    # Quest names for the archive's quest ids.
+    "FileCfg/QuestConfigTemplateTb.json",
+    # In-level dialogue (Ongoing*) text keys -> speaker names / voice aliases.
+    "FileCfg/OngoingTipsConfigTemplateTb.json",
     "FileCfg/ChapterTipsConfigTemplateTb.json",
     "FileCfg/ChapterConfigTemplateTb.json",
     "FileCfg/MainStorySeasonTemplateTb.json",

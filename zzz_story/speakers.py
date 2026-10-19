@@ -15,6 +15,9 @@ from .textmap import load_language_map
 
 CACHE_VERSION = 5
 
+_TIPS_VOICE_RE = re.compile(r"^[A-Za-z]+_Chapter\w+_([A-Za-z]+)_\d+_\d+$")
+_TIPS_NAME_IGNORE = {"选项", "玩家选项", "旁白", "咨询", "购买", "找零"}
+
 _ALIAS_IN_BANKS = re.compile(r"(?:^|\|)BK_([A-Za-z0-9]+)")
 _ALIAS_IN_PATH = re.compile(r"(?:^|/)VO_([A-Za-z0-9]+)(?:/|$)")
 _GALGAME_SOURCE = re.compile(
@@ -209,6 +212,7 @@ class SpeakerStats:
     avatar_links: int = 0
     avatar_values: int = 0
     avatar_speakers: int = 0
+    tips_speakers: int = 0
 
 
 def alias_from_source(source: str) -> str | None:
@@ -243,6 +247,46 @@ def _normalized_key_index(text_keys: set[str]) -> dict[str, str]:
     return index
 
 
+def ongoing_tips_speakers(
+    data_paths: dict[str, Path],
+    text_map,
+    alias_map: dict[str, str],
+    protagonist: str = "M",
+) -> dict[str, tuple[str, str | None]]:
+    """Speakers for in-level dialogue (Ongoing*) from OngoingTipsConfigTemplateTb.
+
+    Each row ties a TextMap line key to a display-name key and to the voice
+    bank of the speaking character ( Belle/Wise variants included), which
+    covers lines the Perform block scan cannot reach.
+    """
+    path = data_paths.get("FileCfg/OngoingTipsConfigTemplateTb.json")
+    out: dict[str, tuple[str, str | None]] = {}
+    if not path or not path.exists():
+        return out
+    payload = read_json(path)
+    rows = payload.get("IAEFFFFLKNB", []) if isinstance(payload, dict) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        text_key = row.get("FGAHJLHNEDB")
+        if not isinstance(text_key, str) or not text_key.startswith(("Main_", "MainChat_")):
+            continue
+        name = text_map.get(str(row.get("BLOGJEGIBOH") or ""))
+        if name and name not in _GENERIC_NAMES and name not in _TIPS_NAME_IGNORE:
+            out[text_key] = (name, None)
+            continue
+        primary, secondary = (
+            ("CIBKAFBOGCI", "PFOBGIIIICG") if protagonist == "M" else ("PFOBGIIIICG", "CIBKAFBOGCI")
+        )
+        voice = row.get(primary) or row.get(secondary) or ""
+        match = _TIPS_VOICE_RE.match(voice) if isinstance(voice, str) else None
+        alias = match.group(1) if match else None
+        speaker = resolve_alias(alias, alias_map) if alias else None
+        if speaker:
+            out[text_key] = (speaker, alias)
+    return out
+
+
 def build_speaker_index(
     *,
     text_map,
@@ -254,9 +298,56 @@ def build_speaker_index(
     no_speakers: bool = False,
 ) -> tuple["SpeakerIndex", SpeakerStats]:
     stats = SpeakerStats()
-    if no_speakers or game_dir is None:
+    if no_speakers:
         return SpeakerIndex({}, stats), stats
 
+    avatar_path = data_paths.get("FileCfg/AvatarBaseTemplateTb.json")
+    if not avatar_path or not avatar_path.exists():
+        print("warning: speaker inputs missing; continuing without per-line speakers")
+        return SpeakerIndex({}, stats), stats
+
+    en_map = load_language_map(data_paths, "EN")
+    alias_map = load_alias_map(text_map, en_map, read_json(avatar_path))
+    print(f"  alias table: {len(alias_map)} entries (EN names + AvatarBase)")
+    tips = ongoing_tips_speakers(data_paths, text_map, alias_map, "M")
+    if tips:
+        print(f"  ongoing tips: {len(tips)} speaker keys")
+
+    perform_path = data_paths.get("FileCfg/PerformTemplateTb.json")
+    voice_path = data_paths.get("Data/_unsorted/VoiceData.json")
+    speakers: dict[str, SpeakerInfo] = {}
+    option_keys: set[str] = set()
+    if game_dir is None or not perform_path or not voice_path:
+        print("warning: game data missing; only ongoing-tip speakers available")
+    else:
+        speakers, option_keys = _perform_speakers(
+            text_map, alias_map, perform_path, game_dir, cache_path, refresh, stats
+        )
+
+    # Ongoing tips cover in-level barks the Perform blocks cannot reach.
+    for text_id, (name, alias) in tips.items():
+        info = speakers.get(text_id)
+        if info is None or not info.speaker:
+            speakers[text_id] = SpeakerInfo(
+                name,
+                alias or (info.alias if info else None),
+                0.9,
+                "tips",
+                bool(info and info.has_voice),
+            )
+            stats.tips_speakers += 1
+    return _index_from_speakers(speakers, text_keys, stats, option_keys), stats
+
+
+def _perform_speakers(
+    text_map,
+    alias_map: dict[str, str],
+    perform_path: Path,
+    game_dir: Path,
+    cache_path: Path,
+    refresh: bool,
+    stats: SpeakerStats,
+) -> tuple[dict[str, SpeakerInfo], set[str]]:
     if cache_path.exists() and not refresh:
         try:
             payload = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -271,22 +362,9 @@ def build_speaker_index(
                 if hasattr(stats, key):
                     setattr(stats, key, value)
             print(f"Loaded speaker cache: {len(speakers)} text ids, {len(options)} options")
-            return _index_from_speakers(speakers, text_keys, stats, options), stats
+            return speakers, options
         except Exception as exc:  # noqa: BLE001 - rebuild on corrupt cache
             print(f"Speaker cache unreadable, rebuilding: {exc}")
-
-    perform_path = data_paths.get("FileCfg/PerformTemplateTb.json")
-    avatar_path = data_paths.get("FileCfg/AvatarBaseTemplateTb.json")
-    voice_path = data_paths.get("Data/_unsorted/VoiceData.json")
-    if not perform_path or not avatar_path or not voice_path:
-        print("warning: speaker inputs missing; continuing without per-line speakers")
-        return SpeakerIndex({}, stats), stats
-
-    en_map = load_language_map(data_paths, "EN")
-    alias_map = load_alias_map(text_map, en_map, read_json(avatar_path))
-    print(f"  alias table: {len(alias_map)} entries (EN names + AvatarBase)")
-    voice_payload = read_json(voice_path)
-    _ = voice_payload  # currently only used for diagnostics; source paths carry VO_<alias>
 
     print("Finding resource catalog...")
     catalog_path = find_catalog_block(game_dir)
@@ -314,7 +392,7 @@ def build_speaker_index(
     )
     if not block_paths:
         print("warning: no Perform blocks found; continuing without per-line speakers")
-        return SpeakerIndex({}, stats), stats
+        return {}, set()
 
     source_to_text, avatar_to_text, option_keys, scan_stats = scan_perform_blocks(block_paths)
     stats.links = scan_stats.links
@@ -377,7 +455,7 @@ def build_speaker_index(
     }
     cache_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     print(f"Cached speaker map: {cache_path}")
-    return _index_from_speakers(speakers, text_keys, stats, option_keys), stats
+    return speakers, option_keys
 
 
 def _index_from_speakers(

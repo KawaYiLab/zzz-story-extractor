@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import csv
 import difflib
 import json
@@ -24,7 +25,7 @@ from .fetch import (
 )
 from .keys import ParsedKey, natural_scene_key, parse_key
 from .lore import extract_lore
-from .speakers import SpeakerInfo, build_speaker_index
+from .speakers import _MANUAL_ALIASES, SpeakerInfo, build_speaker_index, normalize_name
 from .textmap import TextMap, load_text_map
 from .writers import (
     write_chapter_files,
@@ -46,25 +47,29 @@ MAIN_FAMILIES = {
     "ChatAudio",
     "ChatPlus",
 }
+# Deterministic per-chapter block order.  GalGame (S2+) and MainChat (S1)
+# carry the main story; the rest is supplementary dialogue.  Cross-family
+# chronology does not exist in the public data, so families are not
+# interleaved on purpose.
 FAMILY_ORDER = {
     "GalGame": 0,
-    "Chat": 1,
-    "BubbleStory": 2,
-    "Bubble": 3,
-    "OngoingLevel": 4,
-    "OngoingMainCity": 5,
-    "Ongoing": 6,
-    "ChatAudio": 7,
-    "ChatPlus": 8,
-    "OngoingAntique": 9,
-    "MainChat": 10,
+    "MainChat": 1,
+    "Chat": 2,
+    "ChatAudio": 3,
+    "ChatPlus": 4,
+    "BubbleStory": 5,
+    "Bubble": 6,
+    "OngoingLevel": 7,
+    "OngoingMainCity": 8,
+    "Ongoing": 9,
+    "OngoingAntique": 10,
 }
 
 NAME_IGNORE = {"选项", "玩家选项", "旁白", "咨询", "购买", "找零"}
+OPTION_SPEAKERS = {"选项", "玩家选项"}
 PLAYER_NAMES = {"铃", "哲"}
-# Explicit forms of address that identify the two protagonist branches.
+# Explicit male forms of address; lines using them are male-branch content.
 MALE_ADDRESS = ("小师弟", "师弟", "哲小哥", "哲先生", "哲哥")
-FEMALE_ADDRESS = ("小师妹", "师妹", "小铃", "铃小姐", "铃姐")
 # Test/dev or side-content tables that are not part of the shipped main story.
 EXCLUDED_CHAPTERS = {"Chapter020", "Chapter080", "PortChapter110"}
 
@@ -167,12 +172,87 @@ def _load_scene_titles(data_paths: dict[str, Path], text_map: TextMap) -> dict[s
     return titles
 
 
-def _line_sort_key(record: dict) -> tuple:
+
+def _load_archive_order(data_paths: dict[str, Path], text_map: TextMap) -> tuple[dict[str, tuple[int, int]], dict[int, str]]:
+    """Official story-replay order of GalGame scenes, plus quest names.
+
+    ArchivePerformTemplateTb lists replayable scenes in story order; its id
+    divided by 100 is the quest id from QuestConfigTemplateTb.
+    """
+    quest_names: dict[int, str] = {}
+    quest_path = data_paths.get("FileCfg/QuestConfigTemplateTb.json")
+    if quest_path and quest_path.exists():
+        rows = read_json(quest_path)
+        rows = rows.get("IAEFFFFLKNB", []) if isinstance(rows, dict) else []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = text_map.get(str(row.get("ANCOBODLNIK", ""))).strip()
+            if row.get("ODCODEPMLGG") and name:
+                quest_names[row["ODCODEPMLGG"]] = name
+
+    scene_order: dict[str, tuple[int, int]] = {}
+    archive_path = data_paths.get("FileCfg/ArchivePerformTemplateTb.json")
+    if archive_path and archive_path.exists():
+        rows = read_json(archive_path)
+        rows = rows.get("IAEFFFFLKNB", []) if isinstance(rows, dict) else []
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            scene = row.get("JFHCIJHJLOH")
+            archive_id = row.get("PFOAJKNPCHL")
+            if scene and archive_id:
+                scene_order[str(scene)] = (index, archive_id // 100)
+    return scene_order, quest_names
+
+
+def _galgame_scene_positions(scenes: list[str], scene_order: dict[str, tuple[int, int]]) -> dict[str, float]:
+    """Position scenes by the official replay archive order.
+
+    Scenes missing from the archive (prologue, unreplayable fights) keep
+    their numeric order and are slotted between their archived neighbours.
+    """
+    archived = sorted(
+        (scene_order[scene][0], scene) for scene in scenes if scene in scene_order
+    )
+    if not archived:
+        return {}
+    positions = {scene: float(index) for index, (_, scene) in enumerate(archived)}
+    by_number = sorted(
+        (int(scene), positions[scene]) for _, scene in archived if scene.isdigit()
+    )
+    numbers = [number for number, _ in by_number]
+    pending: dict[tuple[float, float], list[str]] = {}
+    rest: list[str] = []
+    for scene in scenes:
+        if scene in positions:
+            continue
+        if not scene.isdigit() or not by_number:
+            rest.append(scene)
+            continue
+        slot = bisect.bisect_left(numbers, int(scene))
+        low = by_number[slot - 1][1] if slot else by_number[0][1] - 1.0
+        high = by_number[slot][1] if slot < len(by_number) else by_number[-1][1] + 1.0
+        pending.setdefault((low, high), []).append(scene)
+    for (low, high), group in pending.items():
+        group.sort(key=int)
+        step = (high - low) / (len(group) + 1)
+        for index, scene in enumerate(group, 1):
+            positions[scene] = low + step * index
+    next_pos = max(positions.values()) + 1.0
+    for scene in sorted(rest, key=natural_scene_key):
+        positions[scene] = next_pos
+        next_pos += 1.0
+    return positions
+
+def _line_sort_key(record: dict, scene_positions: dict[tuple[str, str], float]) -> tuple:
     info = chapter_info(record["chapter"])
+    position = scene_positions.get((record["chapter"], record["scene"]))
+    scene_key = (0, position) if position is not None else (1,) + natural_scene_key(record["scene"])
     return (
         info.order,
-        natural_scene_key(record["scene"]),
         FAMILY_ORDER.get(record["family"], 50),
+        scene_key,
         record["line_no"],
         record["sub_no"] or 0,
         record["variant"] or "",
@@ -202,24 +282,21 @@ def extract(
     refresh_speakers: bool = False,
     no_speakers: bool = False,
     require_speakers: float | None = None,
-    protagonist: str = "F",
     formats: str = "jsonl,txt",
     include_supplement: bool = True,
     dedupe: bool = True,
-    canonical_gender: bool = True,
     limit: int | None = None,
     include_lore: bool = True,
 ) -> ExtractStats:
-    protagonist = protagonist.upper()
-    if protagonist not in {"M", "F", "BOTH"}:
-        raise ValueError("protagonist must be M, F or BOTH")
-
     out_dir.mkdir(parents=True, exist_ok=True)
     data_paths = ensure_data(lang=lang, refresh=refresh, data_dir=data_dir)
     print("Loading TextMap...")
     text_map = load_text_map(data_paths, language=lang)
     print(f"  {len(text_map)} entries loaded")
     scene_titles = _load_scene_titles(data_paths, text_map)
+    scene_order, quest_names = _load_archive_order(data_paths, text_map)
+    if scene_order:
+        print(f"  story archive: {len(scene_order)} ordered scenes, {len(quest_names)} quest names")
 
     game_dir = detect_game_dir(game_dir)
     if game_dir:
@@ -237,16 +314,12 @@ def extract(
     supplement: list[dict] = []
     selected_keys: list[str] = []
 
-    # Keys ending in F are sibling-protagonist variants of the base key.
-    # In the default female-protagonist mode keep F and drop the base line;
-    # in male mode do the reverse.  This removes duplicate male/female copies.
-    f_base_keys: set[str] = set()
+    # Keys ending in F are the female-protagonist copies of the base key.
+    # Male-only extraction drops them and keeps the base (male) version.
     f_variant_keys: set[str] = set()
     for key in text_map.keys():
         if key.endswith("F") and re.search(r"(?:Name_?\d+|\d+)F$", key):
-            base = key[:-1]
-            if base in text_map:
-                f_base_keys.add(base)
+            if key[:-1] in text_map:
                 f_variant_keys.add(key)
 
     for key in text_map.keys():
@@ -266,16 +339,14 @@ def extract(
             continue
         if parsed.family == "MainChat" and not parsed.chapter_token.startswith("Chapter"):
             continue
-        if protagonist == "F" and key in f_base_keys:
-            continue
-        if protagonist == "M" and key in f_variant_keys:
+        if key in f_variant_keys:
             continue
         if parsed.family in MAIN_FAMILIES or parsed.family == "MainChat":
             if limit is not None and stats.line_keys >= limit:
                 continue
             if parsed.kind == "name":
                 raw = text_map.get(key)
-                cleaned = clean_text(raw, protagonist if protagonist != "BOTH" else "F").text
+                cleaned = clean_text(raw, "M").text
                 if not cleaned:
                     continue
                 stats.selected_keys += 1
@@ -291,43 +362,10 @@ def extract(
                 if len(stats.missing_examples) < 100:
                     stats.missing_examples.append(key)
                 continue
-            if protagonist == "BOTH":
-                cleaned_m = clean_text(raw, "M")
-                cleaned_f = clean_text(raw, "F")
-                if not cleaned_m.text and not cleaned_f.text:
-                    continue
-                if cleaned_m.text == cleaned_f.text:
-                    pending.append(
-                        _pending_record(
-                            parsed,
-                            cleaned_f.text or cleaned_m.text,
-                            raw,
-                            None,
-                            parsed.variant,
-                        )
-                    )
-                else:
-                    variants = {
-                        gender: cleaned.text
-                        for gender, cleaned in (("M", cleaned_m), ("F", cleaned_f))
-                        if cleaned.text
-                    }
-                    for gender, text in variants.items():
-                        pending.append(_pending_record(parsed, text, raw, variants, gender))
-            else:
-                cleaned = clean_text(raw, protagonist)
-                if not cleaned.text:
-                    continue
-                if canonical_gender and protagonist in {"M", "F"}:
-                    has_male = any(token in cleaned.text for token in MALE_ADDRESS)
-                    has_female = any(token in cleaned.text for token in FEMALE_ADDRESS)
-                    if protagonist == "F" and has_male and not has_female:
-                        stats.branch_filtered += 1
-                        continue
-                    if protagonist == "M" and has_female and not has_male:
-                        stats.branch_filtered += 1
-                        continue
-                pending.append(_pending_record(parsed, cleaned.text, raw, cleaned.variants, parsed.variant))
+            cleaned = clean_text(raw, "M")
+            if not cleaned.text:
+                continue
+            pending.append(_pending_record(parsed, cleaned.text, raw, cleaned.variants, parsed.variant))
             stats.selected_keys += 1
             stats.line_keys += 1
             if stats.line_keys % 10000 == 0:
@@ -338,7 +376,7 @@ def extract(
             raw = text_map.get(key)
             if not raw:
                 continue
-            cleaned = clean_text(raw, "F" if protagonist == "BOTH" else protagonist)
+            cleaned = clean_text(raw, "M")
             if not cleaned.text:
                 continue
             if parsed.family == "CS":
@@ -380,7 +418,7 @@ def extract(
         game_dir=game_dir,
         cache_path=cache_root / "speakers_cache.json",
         refresh=refresh_speakers,
-        no_speakers=no_speakers or game_dir is None,
+        no_speakers=no_speakers,
     )
     stats.speaker_stats = asdict(speaker_stats)
     alias_name_map = _infer_alias_names(pending, speaker_index, names_global)
@@ -415,13 +453,18 @@ def extract(
                 speaker_source = "scene_name"
                 stats.scene_fallback += 1
 
+        speaker = _normalize_speaker(speaker, "M")
+        forced_option = speaker in OPTION_SPEAKERS
+        if speaker in NAME_IGNORE:
+            speaker = None
+
         if has_voice:
             stats.voice_linked += 1
             if speaker:
                 stats.voice_speaker += 1
 
-        is_opt = False
-        if not speaker or speaker in PLAYER_NAMES:
+        is_opt = forced_option
+        if not is_opt and (not speaker or speaker in PLAYER_NAMES):
             if source_key in speaker_index._options:
                 is_opt = True
             elif speaker_index.is_option(source_key):
@@ -444,6 +487,9 @@ def extract(
 
         info_chapter = chapter_info(chapter)
         display_speakers = [name for name in scene_names if name not in NAME_IGNORE]
+        quest_name = None
+        if family == "GalGame" and scene in scene_order:
+            quest_name = quest_names.get(scene_order[scene][1])
         record = {
             "line_id": "",
             "chapter": chapter,
@@ -452,6 +498,7 @@ def extract(
             "scene": scene,
             "scene_act": 0,
             "scene_title": None,
+            "quest_name": quest_name,
             "family": family,
             "line_no": pending_record["_line_no"],
             "sub_no": pending_record["_sub_no"],
@@ -470,27 +517,27 @@ def extract(
         }
         records.append(record)
 
-    if canonical_gender and protagonist in {"M", "F"}:
-        records, dropped = _collapse_gender_pairs(records, protagonist)
-        stats.gender_pair_filtered += dropped
+    _mark_unattributed_scenes(records)
 
-    records.sort(key=_line_sort_key)
+    # Address filtering must see both branches before pair collapsing
+    # keeps one of them by speaker alone.
+    records, dropped = _filter_branch_lines(records)
+    stats.branch_filtered += dropped
+    records, dropped = _collapse_gender_pairs(records, "M")
+    stats.gender_pair_filtered += dropped
+
+    galgame_scenes: dict[str, list[str]] = {}
+    for record in records:
+        if record["family"] == "GalGame" and record["scene"] not in galgame_scenes.setdefault(record["chapter"], []):
+            galgame_scenes[record["chapter"]].append(record["scene"])
+    scene_positions: dict[tuple[str, str], float] = {}
+    for chapter, scenes in galgame_scenes.items():
+        for scene, position in _galgame_scene_positions(scenes, scene_order).items():
+            scene_positions[(chapter, scene)] = position
+    records.sort(key=lambda record: _line_sort_key(record, scene_positions))
     if dedupe:
-        seen: set[tuple] = set()
-        kept: list[dict] = []
-        for record in records:
-            key = (
-                record["chapter"],
-                record["scene"],
-                record["variant"],
-                record["text"],
-            )
-            if key in seen:
-                stats.deduped += 1
-                continue
-            seen.add(key)
-            kept.append(record)
-        records = kept
+        records, dropped = _dedupe_records(records, "M")
+        stats.deduped += dropped
 
     scene_acts_by_chapter: dict[str, dict[str, int]] = {}
     for record in records:
@@ -544,18 +591,12 @@ def extract(
                 ):
                     p_txt = prev["text"]
                     c_txt = rec["text"]
-                    if protagonist == "F":
-                        if "哥哥" in p_txt and "妹妹" in c_txt:
-                            continue
-                        if "妹妹" in p_txt and "哥哥" in c_txt:
-                            kept_supp[-1] = rec
-                            continue
-                    elif protagonist == "M":
-                        if "妹妹" in p_txt and "哥哥" in c_txt:
-                            continue
-                        if "哥哥" in p_txt and "妹妹" in c_txt:
-                            kept_supp[-1] = rec
-                            continue
+                    # Male-only: keep the version addressing Belle (妹妹).
+                    if "妹妹" in p_txt and "哥哥" in c_txt:
+                        continue
+                    if "哥哥" in p_txt and "妹妹" in c_txt:
+                        kept_supp[-1] = rec
+                        continue
             kept_supp.append(rec)
         supplement = kept_supp
 
@@ -624,7 +665,7 @@ def extract(
         "source_version": source_version,
         "local_game_version": read_game_version(game_dir) if game_dir else "",
         "game_dir": str(game_dir) if game_dir else "",
-        "protagonist": protagonist,
+        "protagonist": "M",
         "counts": {
             "line_keys": stats.line_keys,
             "name_keys": stats.name_keys,
@@ -765,6 +806,222 @@ def _collapse_gender_pairs(records: list[dict], protagonist: str) -> tuple[list[
     return [record for record in records if id(record) not in drop], len(drop)
 
 
+def _normalize_speaker(speaker: str | None, gender: str) -> str | None:
+    """Clean display names that come straight from Perform avatar keys."""
+    if not speaker:
+        return None
+    if "{" in speaker:
+        speaker = clean_text(speaker, gender).text
+    speaker = speaker.strip()
+    if speaker.isascii():
+        speaker = _MANUAL_ALIASES.get(normalize_name(speaker), speaker)
+    return speaker or None
+
+
+def _mark_unattributed_scenes(records: list[dict]) -> None:
+    """Use ``unknown`` instead of ``narration`` where speaker data is absent.
+
+    A speaker-less line is only plausible narration when the scene has
+    speaker data at all; scenes without any (Bubble/Ongoing families, some
+    prologue tables) are simply not covered by the Perform scan.
+    """
+    attributed = {
+        (record["chapter"], record["scene"], record["family"])
+        for record in records
+        if record["speaker"]
+    }
+    # These families are character barks / UI dialogue, never narration.
+    non_narration = {
+        "BubbleStory", "Bubble",
+        "OngoingLevel", "OngoingMainCity", "Ongoing", "OngoingAntique",
+        "ChatPlus",
+    }
+    for record in records:
+        if record["line_type"] != "narration":
+            continue
+        if record["family"] in non_narration:
+            record["line_type"] = "unknown"
+        elif (record["chapter"], record["scene"], record["family"]) not in attributed:
+            record["line_type"] = "unknown"
+
+
+# Belle-side markers: lines addressing Belle (师妹, 哥哥, ...) belong to the
+# female-protagonist branch of a sibling pair.
+_BELLE_MARKERS = ("小师妹", "师妹", "小铃", "铃小姐", "铃姐", "哥哥")
+
+# Gendered tokens blanked out when comparing two lines, so the male and
+# female branch of the same beat normalize to the same text.
+_GENDER_TOKENS = (
+    ("小师妹", "小师弟"),
+    ("师妹", "师弟"),
+    ("铃小姐", "哲先生"),
+    ("小铃", "哲小哥"),
+    ("铃姐", "哲哥"),
+    ("哥哥", "哥哥"),
+    ("铃", "哲"),
+    ("她", "他"),
+)
+
+
+def _normalize_gender(text: str) -> str:
+    for female, male in _GENDER_TOKENS:
+        text = text.replace(female, "#").replace(male, "#")
+    return text
+
+
+def _filter_branch_lines(records: list[dict]) -> tuple[list[dict], int]:
+    """Drop the female branch of sibling-paired lines (male-only extraction).
+
+    Many beats are written twice, once per protagonist.  Two lines form a
+    pair when they sit in the same scene and match after gendered tokens
+    (师妹/师弟, 铃/哲, 哥哥, ...) are blanked out.  Within a pair the
+    Belle-side line is dropped: first lines with Belle markers, then bare-铃
+    vocatives whose twin addresses 哲.  Lines spoken by 哲 himself and lines
+    with male markers (师弟, 哲先生, ...) are always kept, and so is every
+    line without a twin, which preserves Belle's dialogue as the NPC sister
+    and NPC lines about other people (潘师弟, ...).
+    """
+    grouped: dict[tuple[str, str, str], list[int]] = {}
+    for index, record in enumerate(records):
+        grouped.setdefault((record["chapter"], record["scene"], record["family"]), []).append(index)
+
+    drop: set[int] = set()  # global indices into records
+    for indices in grouped.values():
+        normalized = [_normalize_gender(records[i]["text"]) for i in indices]
+
+        def find_twin(position: int) -> int | None:
+            record = records[indices[position]]
+            norm = normalized[position]
+            for other_pos, c_norm in enumerate(normalized):
+                other = indices[other_pos]
+                if other_pos == position or other in drop:
+                    continue
+                c_text = records[other]["text"]
+                if c_text == record["text"]:
+                    continue  # same wording is a duplicate, not a branch pair
+                if abs(len(c_text) - len(record["text"])) > max(4, len(record["text"]) // 5):
+                    continue
+                # Branch pairs often rephrase slightly (我查过了/我查了一下),
+                # so after blanking the gendered tokens a 0.7 bar is enough.
+                if difflib.SequenceMatcher(None, norm, c_norm).ratio() < 0.7:
+                    continue
+                return other
+            return None
+
+        # Pass 1: explicit Belle markers (师妹, 哥哥, ...).
+        for position, index in enumerate(indices):
+            record = records[index]
+            speaker = record["speaker"]
+            if speaker and len(speaker) <= 4 and speaker.endswith("哲"):
+                continue  # Wise himself is speaking
+            text = record["text"]
+            if any(token in text for token in MALE_ADDRESS):
+                continue  # male-branch address is kept
+            if not any(marker in text for marker in _BELLE_MARKERS):
+                continue
+            if find_twin(position) is not None:
+                drop.add(index)
+
+        # Pass 2: bare-铃 vocatives whose surviving twin addresses 哲.
+        for position, index in enumerate(indices):
+            if index in drop:
+                continue
+            record = records[index]
+            speaker = record["speaker"]
+            if speaker and len(speaker) <= 4 and speaker.endswith("哲"):
+                continue
+            text = record["text"]
+            if "铃" not in text or any(marker in text for marker in _BELLE_MARKERS):
+                continue
+            if any(token in text for token in MALE_ADDRESS):
+                continue
+            twin = find_twin(position)
+            if twin is None:
+                continue
+            twin_text = records[twin]["text"]
+            if "哲" in twin_text and "铃" not in twin_text:
+                drop.add(index)
+
+    if not drop:
+        return records, 0
+    return [record for index, record in enumerate(records) if index not in drop], len(drop)
+
+def _is_protagonist_name(name: str | None) -> bool:
+    # Covers 铃/哲 and costume variants such as 学生铃 or 道士哲.
+    return bool(name) and len(name) <= 4 and name[-1] in "铃哲"
+
+
+def _same_up_to_protagonist(a: str | None, b: str | None) -> bool:
+    return bool(a and b) and a != b and a.replace("哲", "铃") == b.replace("哲", "铃")
+
+
+def _dedupe_records(
+    records: list[dict],
+    protagonist: str | None,
+    *,
+    canonical: bool = True,
+) -> tuple[list[dict], int]:
+    """Remove duplicated protagonist-branch copies of the same line.
+
+    Identical text alone is not a duplicate: NPCs legitimately repeat short
+    lines such as ``……`` within one scene.  A repeat is dropped only when it
+    is the other protagonist's copy, sits right next to its twin, or belongs
+    to a duplicated run (a branch block copied for both protagonists).
+    With ``canonical=False`` only adjacent same-speaker repeats are removed.
+    """
+    own = "铃" if protagonist == "F" else ("哲" if protagonist == "M" else None)
+
+    def preference(record: dict) -> int:
+        speaker = record["speaker"]
+        if own and _is_protagonist_name(speaker) and speaker.endswith(own):
+            return 2
+        return 1 if speaker else 0
+
+    groups: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+    for record in records:
+        key = (record["chapter"], record["scene"], record["family"], record["variant"])
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(record)
+
+    drop: set[int] = set()
+    for key in order:
+        group = groups[key]
+        first: dict[str, int] = {}
+        for i, record in enumerate(group):
+            text = record["text"]
+            j = first.get(text)
+            if j is None:
+                first[text] = i
+                continue
+            prev = group[j]
+            a, b = prev["speaker"], record["speaker"]
+            gap = i - j
+            if canonical:
+                duplicate = (
+                    _same_up_to_protagonist(a, b)
+                    or (gap <= 3 and (a is None or b is None) and (_is_protagonist_name(a) or _is_protagonist_name(b)))
+                    or (gap == 1 and (a == b or a is None or b is None))
+                    or (j > 0 and i - 1 != j and group[i - 1]["text"] == group[j - 1]["text"])
+                    or (i + 1 < len(group) and j + 1 != i and group[i + 1]["text"] == group[j + 1]["text"])
+                )
+            else:
+                duplicate = gap == 1 and a == b
+            if not duplicate:
+                continue
+            if preference(record) > preference(prev):
+                drop.add(id(prev))
+                first[text] = i
+            else:
+                drop.add(id(record))
+
+    if not drop:
+        return records, 0
+    return [record for record in records if id(record) not in drop], len(drop)
+
+
 def _assign_line_ids(records: list[dict]) -> None:
     used: set[str] = set()
     for index, record in enumerate(records, 1):
@@ -799,6 +1056,7 @@ def _write_csv(records: list[dict], path: Path) -> None:
         "scene",
         "scene_act",
         "scene_title",
+        "quest_name",
         "family",
         "line_no",
         "sub_no",
@@ -822,6 +1080,7 @@ def _write_csv(records: list[dict], path: Path) -> None:
         for record in records:
             row = dict(record)
             row["scene_title"] = row.get("scene_title") or ""
+            row["quest_name"] = row.get("quest_name") or ""
             row["text_variants"] = json.dumps(row["text_variants"], ensure_ascii=False) if row["text_variants"] else ""
             row["scene_speakers"] = "、".join(row["scene_speakers"])
             writer.writerow(row)
