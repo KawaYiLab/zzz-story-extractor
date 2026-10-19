@@ -110,6 +110,28 @@ DIALOGUE_TAG_ALIASES: dict[str, str] = {
     "nico": "1031",
 }
 
+# Canonical in-game Camp mapping (enum OOOHMBMDLBI and CJELJCPENOL // 100)
+CAMP_ID_MAP: dict[int, str] = {
+    1: "狡兔屋",
+    2: "维多利亚家政",
+    3: "白祇重工",
+    4: "卡吕冬之子",
+    5: "奥波勒斯小队",
+    6: "对空六课",
+    7: "刑侦特勤组",
+    8: "天琴座",
+    9: "反舌鸟",
+    10: "云岿山",
+    11: "怪啖屋",
+    12: "坎卜斯黑枝",
+    13: "妄想天使",
+    14: "都市秩序部",
+    15: "外务筹策局",
+    16: "达识结社",
+    17: "空巡局",
+    18: "弗林特工坊",
+}
+
 
 def _clean(raw: str, default: str = "") -> str:
     if not raw:
@@ -232,9 +254,13 @@ def _extract_agents(
         name = _clean(tm.get(a.get("HAKHHHCAENA", ""), ""))
         full_name = _clean(tm.get(a.get("JGHFBBCBBBA", ""), name))
         camp_id = a.get("OOOHMBMDLBI", 0)
-        camp_name = _clean(
-            tm.get(f"PartnerCamp_Name_{camp_id:02d}", tm.get(f"PartnerCamp_Name_{camp_id}", "未知阵营"))
-        )
+        cjel = a.get("CJELJCPENOL", 0)
+        c_idx = (cjel // 100) - 100 if cjel >= 10000 else camp_id
+        camp_name = CAMP_ID_MAP.get(c_idx, CAMP_ID_MAP.get(camp_id))
+        if not camp_name:
+            camp_name = _clean(
+                tm.get(f"PartnerCamp_Name_{camp_id:02d}", tm.get(f"PartnerCamp_Name_{camp_id}", "漫游者"))
+            )
         code = str(a.get("FEKFJBFGANO") or "")
 
         # Birthday & Stature with early and variant fallback
@@ -394,6 +420,8 @@ def _extract_agents(
         "达识结社": "11_达识结社与空巡局.md",
         "空巡局": "11_达识结社与空巡局.md",
         "外务筹策局": "11_达识结社与空巡局.md",
+        "都市秩序部": "04_刑侦特勤组.md",
+        "弗林特工坊": "12_漫游者与特别存在.md",
     }
 
     files_to_camps: dict[str, list[str]] = defaultdict(list)
