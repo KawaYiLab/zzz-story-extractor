@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import getpass
+import os
 import sys
 from pathlib import Path
+
+import requests
 
 from . import __version__
 from .catalog import Catalog, find_catalog_block, map_story_assets, story_asset_paths
@@ -18,6 +22,7 @@ from .fetch import (
 )
 from .lore import extract_lore
 from .textmap import load_text_map
+from .upload import UploadError, build_bundle, encode_bundle, upload
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -49,6 +54,18 @@ def _build_parser() -> argparse.ArgumentParser:
     lore_parser.add_argument("--out", type=Path, default=Path("out"), help="output directory")
     lore_parser.add_argument("--data-dir", type=Path, default=None, help="local ZenlessData clone")
     lore_parser.add_argument("--refresh", action="store_true", help="re-download ZenlessData files")
+
+    upload_parser = sub.add_parser(
+        "upload",
+        help="pack the extraction output and upload it to ik-server (story MCP corpus)",
+        description="把提取结果打成语料包并上传到论坛后端（需要管理员账号）。密码从环境变量 IK_PASSWORD 读，不设则交互输入。",
+    )
+    upload_parser.add_argument("--out", type=Path, default=Path("out"), help="extraction output directory (same as extract --out)")
+    upload_parser.add_argument("--server", default=os.environ.get("IK_SERVER"), help="server base URL, e.g. https://ik.tiwat.cn (env IK_SERVER)")
+    upload_parser.add_argument("--account", default=os.environ.get("IK_ACCOUNT"), help="admin email or username (env IK_ACCOUNT)")
+    upload_parser.add_argument("--token", default=os.environ.get("IK_TOKEN"), help="admin bearer token instead of account/password (env IK_TOKEN)")
+    upload_parser.add_argument("--save", type=Path, default=None, help="also write the bundle (.json.gz) to this path")
+    upload_parser.add_argument("--timeout", type=float, default=300.0, help="HTTP timeout in seconds")
 
     doctor = sub.add_parser("doctor", help="check data, game and dependencies")
     doctor.add_argument("--data-dir", type=Path, default=None)
@@ -103,6 +120,47 @@ def _doctor(args: argparse.Namespace) -> int:
     return 0 if ok else 2
 
 
+def _upload(args: argparse.Namespace, out: Path) -> int:
+    try:
+        bundle = build_bundle(out)
+        data = encode_bundle(bundle)
+        print(f"语料包：{out}（{len(data) / 1e6:.1f} MB，设定 {len(bundle['lore'])} 个文件）")
+        if args.save:
+            args.save.parent.mkdir(parents=True, exist_ok=True)
+            args.save.write_bytes(data)
+            print(f"  已保存到 {args.save}")
+        if not args.server:
+            if args.save:
+                return 0
+            print("error: 需要 --server（或环境变量 IK_SERVER）", file=sys.stderr)
+            return 2
+        password = None
+        if not args.token:
+            if not args.account:
+                print("error: 需要 --account（或 IK_ACCOUNT），或者用 --token", file=sys.stderr)
+                return 2
+            password = os.environ.get("IK_PASSWORD") or getpass.getpass(f"{args.account} 的密码：")
+        print(f"上传到 {args.server} …")
+        result = upload(
+            args.server,
+            data,
+            account=args.account,
+            password=password,
+            token=args.token,
+            timeout=args.timeout,
+        )
+    except UploadError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except requests.RequestException as exc:
+        print(f"error: 连接 {args.server} 失败：{exc}", file=sys.stderr)
+        return 2
+    print("上传完成，已生效：")
+    print(f"  版本 id {result.get('id')} · 数据 {result.get('sourceVersion')} {result.get('language')}")
+    print(f"  {result.get('docs')} 篇 · {result.get('lines')} 行 · 说话人覆盖 {float(result.get('speakerCoverage') or 0):.0%}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -114,6 +172,9 @@ def main(argv: list[str] | None = None) -> int:
     if out == Path("out"):
         version = DEFAULT_VERSION
         out = Path("out") / f"zzz_story_{version}_chs"
+
+    if args.command == "upload":
+        return _upload(args, out)
 
     if args.command == "extract-lore":
         try:
