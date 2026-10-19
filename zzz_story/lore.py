@@ -203,7 +203,7 @@ def extract_lore(
     stats: dict[str, int] = {}
 
     stats.update(_extract_agents(text_map, avatar_base_data, lore_dir / "agents"))
-    stats.update(_extract_equipment(text_map, lore_dir / "equipment"))
+    stats.update(_extract_equipment(text_map, lore_dir / "equipment", avatar_base_data))
     stats.update(_extract_interknot(text_map, lore_dir / "interknot"))
     stats.update(_extract_cinema(text_map, lore_dir / "cinema"))
     stats.update(_extract_glossary(text_map, lore_dir / "glossary"))
@@ -594,7 +594,11 @@ def _extract_agents(
     return {"lore_agents": agent_count}
 
 
-def _extract_equipment(tm: TextMap, equip_dir: Path) -> dict[str, int]:
+def _extract_equipment(
+    tm: TextMap,
+    equip_dir: Path,
+    avatar_base_data: dict[str, Any] | list[Any] | None = None,
+) -> dict[str, int]:
     equip_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Drive Discs (EquipmentSuit_*_story)
@@ -730,39 +734,195 @@ def _extract_equipment(tm: TextMap, equip_dir: Path) -> dict[str, int]:
     (equip_dir / "01_驱动盘唱片物语.md").write_text("\n".join(disc_md), encoding="utf-8")
 
     # 2. W-Engines (Item_Weapon_*)
-    engines: list[dict[str, str]] = []
+    aid_to_agent: dict[str, tuple[str, str]] = {}
+    raw_entries: list[dict[str, Any]] = []
+    if isinstance(avatar_base_data, dict):
+        if "IAEFFFFLKNB" in avatar_base_data:
+            raw_entries = avatar_base_data["IAEFFFFLKNB"]
+        else:
+            for v_entry in avatar_base_data.values():
+                if isinstance(v_entry, list):
+                    raw_entries = v_entry
+                    break
+    elif isinstance(avatar_base_data, list):
+        raw_entries = avatar_base_data
+
+    for e in raw_entries:
+        aid = str(e.get("PFOAJKNPCHL", 0))
+        name_k = e.get("HAKHHHCAENA")
+        ag_name = _clean(tm.get(name_k, "")) if name_k else ""
+        camp_id = e.get("OOOHMBMDLBI") or 0
+        camp_name = CAMP_ID_MAP.get(camp_id, "特别存在")
+        if ag_name:
+            aid_to_agent[aid] = (ag_name, camp_name)
+
+    # Canonical known avatar mappings
+    aid_to_agent.setdefault("1071", ("凯撒", "卡吕冬之子"))
+    aid_to_agent.setdefault("1141", ("莱卡恩", "维多利亚家政"))
+    aid_to_agent.setdefault("1161", ("莱特", "卡吕冬之子"))
+    aid_to_agent.setdefault("1301", ("奥菲丝&「鬼火」", "奥波勒斯小队"))
+    aid_to_agent.setdefault("1381", ("零号·安比", "狡兔屋"))
+    aid_to_agent.setdefault("1531", ("星徽·比利", "狡兔屋"))
+
+    engines: list[dict[str, Any]] = []
+    seen_engine_names: set[str] = set()
+
     for k, v in tm.items():
         if k.startswith("Item_Weapon_") and k.endswith("_Name"):
             base = k[:-5]
-            desc = _clean(tm.get(f"{base}_Desc", ""))
+            desc_raw = tm.get(f"{base}_Desc", "")
+            if not desc_raw or desc_raw.startswith("Test"):
+                continue
+
+            name = _clean(v).strip()
+            if name in seen_engine_names:
+                continue
+
+            parts = base.split("_")
+            rank = parts[2] if len(parts) > 2 else "A"
+            is_common = (parts[3] == "Common") if len(parts) > 3 else False
+
+            tid = None
+            owner_agent = ""
+            owner_camp = ""
+            sort_rank = 1 if rank == "S" else (2 if rank == "A" else 3)
+            sort_sub = (1, 999)
+
+            if rank == "B" and is_common and len(parts) > 4:
+                cnum = int(parts[4])
+                tid = f"12{cnum:03d}"
+                sort_sub = (1, cnum)
+            elif rank == "A" and is_common and len(parts) > 4:
+                cnum = int(parts[4])
+                tid = f"13{cnum:03d}"
+                sort_sub = (1, cnum)
+            elif rank == "S" and is_common and len(parts) > 4:
+                cnum = int(parts[4])
+                tid = f"14{cnum:03d}"
+                sort_sub = (1, cnum)
+            elif rank == "A" and not is_common and len(parts) > 3:
+                aid_str = parts[3]
+                if len(aid_str) == 4:
+                    tid = f"131{aid_str[1:3]}"
+                    sort_sub = (0, int(aid_str))
+                    ag_info = aid_to_agent.get(aid_str)
+                    if ag_info:
+                        owner_agent, owner_camp = ag_info
+            elif rank == "S" and not is_common and len(parts) > 3:
+                aid_str = parts[3]
+                if len(aid_str) == 4:
+                    tid = f"141{aid_str[1:3]}"
+                    sort_sub = (0, int(aid_str))
+                    ag_info = aid_to_agent.get(aid_str)
+                    if ag_info:
+                        owner_agent, owner_camp = ag_info
+                elif aid_str.isdigit() and int(aid_str) <= 4:
+                    cnum = int(aid_str)
+                    tid = f"14{cnum:03d}"
+                    sort_sub = (1, cnum)
+
+            talent_title = _clean(tm.get(f"Weapon_TalentTitle_{tid}", "")) if tid else ""
+            talent_des_r1 = _clean(tm.get(f"Weapon_TalentDes_8{tid}01", "")) if tid else ""
+            talent_des_r5 = _clean(tm.get(f"Weapon_TalentDes_8{tid}05", "")) if tid else ""
+
+            # Fallbacks for unit test mock keys
             special = _clean(tm.get(f"{base}_SpecialDesc", ""))
             buff_name = _clean(tm.get(f"{base}_Buff_Name", ""))
             buff_des = _clean(tm.get(f"{base}_Buff_Des", ""))
-            parts = base.split("_")
-            rank = parts[2] if len(parts) > 2 else "A"
-            wid = parts[3] if len(parts) > 3 else ""
-            if desc and not desc.startswith("Test"):
-                engines.append({
-                    "id": wid,
-                    "rank": rank,
-                    "name": _clean(v),
-                    "desc": desc,
-                    "special": special,
-                    "buff_name": buff_name,
-                    "buff_des": buff_des,
-                })
 
-    engine_md = ["# 新艾利都音擎档案与题记\n"]
-    engine_md.append("> 音擎是空洞作战的核心动力装置。每一款特制音擎的外壳与调谐回路，都封存着设计者的执念与战士的烈火足迹。\n")
-    for eng in sorted(engines, key=lambda x: (x["rank"] != "S", x["rank"] != "A", x["name"])):
-        engine_md.append(f"## 【{eng['name']}】（{eng['rank']}级音擎）\n")
-        if eng["special"]:
-            engine_md.append(f"> **专属题记**：*{eng['special']}*\n")
-        engine_md.append("### 音擎构造与由来\n")
-        engine_md.append(f"{eng['desc']}\n")
-        if eng["buff_name"] or eng["buff_des"]:
-            engine_md.append(f"### 核心改装回路：{eng['buff_name']}\n")
-            engine_md.append(f"{eng['buff_des']}\n")
+            short_desc = _clean(tm.get(f"{base}_ShortDesc", ""))
+
+            # Quote & story splitting
+            blocks = [b.strip() for b in desc_raw.split("\n\n") if b.strip()]
+            story_part = ""
+            quote_part = ""
+            if len(blocks) >= 2 and ("「" in blocks[-1] or "——" in blocks[-1]):
+                story_part = _clean("\n\n".join(blocks[:-1]))
+                quote_part = _clean(blocks[-1])
+            else:
+                cleaned_all = _clean(desc_raw)
+                if "「" in cleaned_all and "——" in cleaned_all:
+                    idx = cleaned_all.rfind("「")
+                    story_part = cleaned_all[:idx].strip()
+                    quote_part = cleaned_all[idx:].strip()
+                else:
+                    story_part = cleaned_all
+                    quote_part = ""
+
+            final_quote = special or quote_part
+            final_skill_title = talent_title or buff_name
+            final_skill_r1 = talent_des_r1 or buff_des
+
+            is_exclusive = bool(owner_agent or final_quote)
+            cat_label = f"专属特化（{owner_agent}）" if owner_agent else ("专属特化" if is_exclusive else "标准量产")
+
+            seen_engine_names.add(name)
+            engines.append({
+                "name": name,
+                "rank": rank,
+                "sort_key": (sort_rank, sort_sub, name),
+                "owner_agent": owner_agent,
+                "owner_camp": owner_camp,
+                "category_label": cat_label,
+                "short_desc": short_desc,
+                "story": story_part,
+                "quote": final_quote,
+                "skill_title": final_skill_title,
+                "skill_des_r1": final_skill_r1,
+                "skill_des_r5": talent_des_r5,
+            })
+
+    # Sort strictly by rank, signature-first, then ID/number
+    engines.sort(key=lambda x: x["sort_key"])
+
+    engine_md = [
+        "# 新艾利都音擎档案与专属题记（全100款核心改装与战士名言录）\n",
+        "> 音擎（W-Engine）是新艾利都空洞作战最核心的高能动力装置与战术武器。每一款特制音擎的外壳与调谐回路，都封存着设计者的执念、改装工艺与战士在裂隙深处的烈火足迹。高阶专属音擎的铭牌与机械外壳上，更铭刻着代理人出生入死时的经典名言与题记。\n",
+        "## 全 100 款音擎品质与战术回路速查总览\n",
+        "| 品质 | 音擎名称 | 类别 / 专属归属 | 所属阵营 | 核心改装回路（被动） | 专属题记名言录 |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- |",
+    ]
+
+    for eng in engines:
+        q_brief = eng["quote"].replace("\n", " ")
+        if len(q_brief) > 35:
+            q_brief = q_brief[:33] + "..."
+        engine_md.append(
+            f"| **{eng['rank']}级** | **《{eng['name']}》** | {eng['category_label']} | {eng['owner_camp'] or '-'} | {eng['skill_title'] or '-'} | {q_brief or '-'} |"
+        )
+
+    engine_md.append("\n---\n")
+    engine_md.append("## 音擎详篇档案（按品质与系列严格排序）\n")
+
+    for eng in engines:
+        engine_md.append(f"### 【{eng['name']}】（{eng['rank']}级 · {eng['category_label']}）\n")
+        engine_md.append("| 音擎参数 | 战术构造档案 |")
+        engine_md.append("| :--- | :--- |")
+        engine_md.append(f"| **品质级别** | **{eng['rank']} 级** |")
+        engine_md.append(f"| **定位分类** | {eng['category_label']} |")
+        if eng["owner_agent"]:
+            engine_md.append(f"| **专属代理人** | **{eng['owner_agent']}**（所属阵营：{eng['owner_camp']}） |")
+        if eng["short_desc"]:
+            engine_md.append(f"| **官方简评** | {eng['short_desc']} |")
+        if eng["skill_title"]:
+            engine_md.append(f"| **核心改装回路** | **{eng['skill_title']}** |")
+        engine_md.append("")
+
+        if eng["quote"]:
+            engine_md.append("#### 📜 专属题记与战士心声\n")
+            engine_md.append(f"> {eng['quote'].replace(chr(10), chr(10) + '> ')}\n")
+
+        engine_md.append("#### ⚙️ 音擎构造与由来纪实\n")
+        engine_md.append(f"{eng['story']}\n")
+
+        if eng["skill_title"] or eng["skill_des_r1"]:
+            engine_md.append(f"#### 🔧 核心改装回路：{eng['skill_title']}\n")
+            if eng["skill_des_r1"]:
+                engine_md.append(f"- **改造 1 阶效果**：{eng['skill_des_r1']}")
+            if eng["skill_des_r5"] and eng["skill_des_r5"] != eng["skill_des_r1"]:
+                engine_md.append(f"- **改造 5 阶（满星）**：{eng['skill_des_r5']}")
+            engine_md.append("")
+
         engine_md.append("---\n")
     (equip_dir / "02_音擎档案与题记.md").write_text("\n".join(engine_md), encoding="utf-8")
 
@@ -1039,7 +1199,7 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "- [12_漫游者与特别存在](agents/12_漫游者与特别存在.md)：哲、铃、流浪猫小黑等\n",
         "### 2. 装备文献与造物图鉴 (`lore/equipment/`)",
         "- [01_驱动盘唱片物语](equipment/01_驱动盘唱片物语.md)：全 30 套驱动盘唱片文献、调律属性与 6 重奏分轨物语全集",
-        "- [02_音擎档案与题记](equipment/02_音擎档案与题记.md)：全 105 款音擎专属构造说明、被动效果与题记引言",
+        "- [02_音擎档案与题记](equipment/02_音擎档案与题记.md)：全 100 款音擎战术构造、核心改装回路与专属题记名言录全集",
         "- [03_邦布机体图鉴](equipment/03_邦布机体图鉴.md)：全 35+ 邦布机体格言、技能连携与萌趣战斗台词",
         "- [04_收藏展架与风味展品](equipment/04_收藏展架与风味展品.md)：录像店货架手办与纪念品风味物语\n",
         "### 3. 绳网论坛与通讯 (`lore/interknot/`)",

@@ -127,3 +127,9 @@ def test_extract_lore(tmp_path):
     assert "第 1 部分曲目" in disc_doc
     assert "记录着《啄木鸟电音》第一部分曲目的驱动盘..." in disc_doc
 
+    engine_doc = (out_dir / "lore" / "equipment" / "02_音擎档案与题记.md").read_text(encoding="utf-8")
+    assert "《德玛拉电池Ⅱ型》" in engine_doc
+    assert "全 100 款音擎品质与战术回路速查总览" in engine_doc
+    assert "以电为名的剑..." in engine_doc
+    assert "电能爆发" in engine_doc
+
