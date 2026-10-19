@@ -83,6 +83,22 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m zzz_story extract --refresh --refresh-speakers --out out
 ```
 
+## 上传到论坛后端（剧情库 MCP）
+
+提取结果可以一键上传到绳网后端（[ikserver-rs](https://github.com/KawaYiLab/ikserver-rs)），供剧情总结 AI 通过 MCP
+（`/v1/story/mcp`）检索与顺读。需要管理员账号：
+
+```powershell
+$env:IK_PASSWORD = "管理员密码"   # 不设则交互输入
+.\.venv\Scripts\python.exe -m zzz_story upload --server https://ik.tiwat.cn --account 管理员邮箱
+```
+
+- 读取 `--out` 指向的输出目录（默认与 `extract` 相同）：`story.jsonl`、`supplement.jsonl`、`manifest.json`、`lore/**/*.md`，
+  打成 gzip 压缩的语料包（3.2.0 全量约 5 MB）后上传；`story.txt`、`chapters/` 等可读版本不上传。
+- 服务端校验并建好索引后立即生效，无需重启；同一份数据重复上传不会多存一份；服务端保留最近 5 个版本可回滚。
+- 用 `--token` 代替账号密码（已有管理员令牌时）；`--save bundle.json.gz` 同时把语料包存到本地。
+- `--server`、`--account`、`--token` 也可以用环境变量 `IK_SERVER`、`IK_ACCOUNT`、`IK_TOKEN`。
+
 ## 数据来源
 
 - 文本与配置：Gitea 镜像 `https://git.mero.moe/dimbreath/ZenlessData`（3.2.0，优先），备用 GitHub 镜像 `https://github.com/malu-no996/ZenlessData`。除 TextMap 外还使用 PerformTemplateTb、ArchivePerformTemplateTb（剧情回放顺序）、QuestConfigTemplateTb（任务名）、OngoingTipsConfigTemplateTb（关卡内对话说话人）等配置表。
@@ -161,6 +177,7 @@ zzz_story/
   speakers.py   voice 别名 → 中文名、缓存
   extract.py    主流程
   writers.py    JSONL/TXT/CSV 输出
+  upload.py     打包语料并上传到论坛后端（剧情库 MCP）
   cli.py        命令行
 reference/
   galgame-perform.ts   mhy1/Perform 算法的参考实现（MIT）
