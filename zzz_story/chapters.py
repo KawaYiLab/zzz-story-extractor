@@ -61,6 +61,7 @@ LABELS: dict[str, str] = {
 
 _INDEX = {token: i for i, token in enumerate(ORDERED_TOKENS)}
 _CHAPTER_RE = re.compile(r"^Chapter(?P<short>.+)$", re.IGNORECASE)
+_SEASON_CHAPTER_RE = re.compile(r"^([1-9])(\d)$")
 
 
 @dataclass(frozen=True)
@@ -110,3 +111,27 @@ def sort_key(token: str) -> tuple[int, str]:
 
 def label_for(token: str) -> str:
     return chapter_info(token).label
+
+
+def season_chapter_token(season: int, chapter: int) -> str:
+    """Main-story token for ``第<season>季 第<chapter>章``.
+
+    The 3.2.0 numbering makes the hundreds digit mean "season - 1", so
+    2.1 -> 110, 3.1 -> 210 and a future 3.4 -> 240.  ``_derive`` is the exact
+    inverse of this function; keep the two in sync.
+    """
+    if season < 1 or chapter < 0:
+        raise ValueError(f"invalid season/chapter: {season}.{chapter}")
+    return f"{(season - 1) * 100 + chapter * 10:03d}"
+
+
+def parse_season_chapter(token: str) -> tuple[int, int] | None:
+    """Parse a ``"21"`` / ``"34"`` style supplement prefix into (season, chapter).
+
+    Season 1 supplement keys are irregular (``01.5``, ``028``, ``05.2``) and
+    have no season digit, so they return ``None`` and stay in an explicit table.
+    """
+    match = _SEASON_CHAPTER_RE.fullmatch(token or "")
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))

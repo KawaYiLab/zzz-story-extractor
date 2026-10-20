@@ -11,7 +11,12 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .chapters import chapter_info, sort_key as chapter_sort_key
+from .chapters import (
+    chapter_info,
+    parse_season_chapter,
+    season_chapter_token,
+    sort_key as chapter_sort_key,
+)
 from .clean import clean_text
 from .fetch import (
     DEFAULT_VERSION,
@@ -27,6 +32,7 @@ from .keys import ParsedKey, natural_scene_key, parse_key
 from .lore import extract_lore
 from .speakers import _MANUAL_ALIASES, SpeakerInfo, build_speaker_index, normalize_name
 from .textmap import TextMap, load_text_map
+from .validate import validate_records
 from .writers import (
     write_chapter_files,
     write_json,
@@ -98,33 +104,46 @@ class ExtractStats:
     speaker_stats: dict = field(default_factory=dict)
 
 
-CS_CHAPTER_MAP: dict[str, tuple[str, str, int]] = {
-    "00": ("Chapter00", "序章", 0),
-    "01": ("Chapter01", "第一季 第一章", 1),
-    "01.5": ("Chapter015", "第一季 第一章间章", 2),
-    "02": ("Chapter02", "第一季 第二章", 3),
-    "02.5": ("Chapter025", "第一季 第二章间章", 4),
-    "028": ("Chapter028", "第一季 第二章", 5),
-    "03": ("Chapter03", "第一季 第三章", 6),
-    "03.5": ("Chapter035", "第一季 第三章间章", 7),
-    "04": ("Chapter04", "第一季 第四章", 8),
-    "04.5": ("Chapter045", "第一季 第四章间章", 9),
-    "05": ("Chapter05", "第一季 第五章", 10),
-    "05.2": ("Chapter052", "第一季 第五章", 11),
-    "05.5": ("Chapter055", "第一季 第五章间章", 12),
-    "05.8": ("Chapter058", "第一季 第五章", 13),
-    "21": ("Chapter210", "第二季 第一章 云霞同归处", 21),
-    "22": ("Chapter220", "第二季 第二章 迟吟的浪涌", 22),
-    "23": ("Chapter230", "第二季 第三章 不要温和地走入那良夜", 23),
-    "24": ("Chapter240", "第二季 第四章 可曾记得梦", 24),
-    "25": ("Chapter250", "第二季 第五章 将临未抵的深渊", 25),
-    "Burnice": ("Story_Burnice", "角色过场 · 柏妮思", 100),
-    "Lighter": ("Story_Lighter", "角色过场 · 莱特", 101),
-    "Lycaon": ("Story_Lycaon", "角色过场 · 莱卡恩", 102),
-    "Nekomiya": ("Story_Nekomiya", "角色过场 · 猫又", 103),
-    "QingYi": ("Story_QingYi", "角色过场 · 青衣", 104),
-    "Rina": ("Story_Rina", "角色过场 · 丽娜", 105),
+# Comic/CS resources carry no chapter token of their own, so a CS key's prefix
+# is its only chapter hint: CS_21_01_010 means season 2, chapter 1.  Season 1
+# tokens are irregular (01.5 / 028 / 05.2 ...) and stay explicit; season 2+ is
+# derived through chapters.season_chapter_token so that renumbering the main
+# story can never silently move old content under a new season again.
+CS_SPECIAL_CHAPTERS: dict[str, tuple[str, str, float]] = {
+    "00": ("Chapter00", "序章", 1.0),
+    "01": ("Chapter01", "第一季 第一章", 2.0),
+    "01.5": ("Chapter015", "第一季 第一章间章", 2.5),
+    "02": ("Chapter02", "第一季 第二章", 3.0),
+    "02.5": ("Chapter025", "第一季 第二章间章", 4.0),
+    "028": ("Chapter028", "第一季 第二章", 4.5),
+    "03": ("Chapter03", "第一季 第三章", 5.0),
+    "03.5": ("Chapter035", "第一季 第三章间章", 5.5),
+    "04": ("Chapter04", "第一季 第四章", 6.0),
+    "04.5": ("Chapter045", "第一季 第四章间章", 6.5),
+    "05": ("Chapter05", "第一季 第五章", 9.0),
+    "05.2": ("Chapter052", "第一季 第五章", 9.2),
+    "05.5": ("Chapter055", "第一季 第五章间章", 9.5),
+    "05.8": ("Chapter058", "第一季 第五章", 9.8),
+    "Burnice": ("Story_Burnice", "角色过场 · 柏妮思", 100.0),
+    "Lighter": ("Story_Lighter", "角色过场 · 莱特", 101.0),
+    "Lycaon": ("Story_Lycaon", "角色过场 · 莱卡恩", 102.0),
+    "Nekomiya": ("Story_Nekomiya", "角色过场 · 猫又", 103.0),
+    "QingYi": ("Story_QingYi", "角色过场 · 青衣", 104.0),
+    "Rina": ("Story_Rina", "角色过场 · 丽娜", 105.0),
 }
+
+
+def cs_chapter(token: str) -> tuple[str, str, float]:
+    """Resolve a CS prefix into ``(chapter_token, chapter_label, chapter_order)``."""
+    special = CS_SPECIAL_CHAPTERS.get(token)
+    if special:
+        return special
+    parsed = parse_season_chapter(token)
+    if parsed and parsed[0] >= 2:
+        chapter_token = f"Chapter{season_chapter_token(*parsed)}"
+        info = chapter_info(chapter_token)
+        return chapter_token, info.label, info.order
+    return f"CS_{token}", f"过场动画（{token}）", 900.0
 
 
 def _load_scene_titles(data_paths: dict[str, Path], text_map: TextMap) -> dict[str, str]:
@@ -287,6 +306,7 @@ def extract(
     dedupe: bool = True,
     limit: int | None = None,
     include_lore: bool = True,
+    strict: bool = True,
 ) -> ExtractStats:
     out_dir.mkdir(parents=True, exist_ok=True)
     data_paths = ensure_data(lang=lang, refresh=refresh, data_dir=data_dir)
@@ -380,13 +400,7 @@ def extract(
             if not cleaned.text:
                 continue
             if parsed.family == "CS":
-                ch_info = CS_CHAPTER_MAP.get(parsed.chapter_token)
-                if ch_info:
-                    ch_token, ch_label, ch_order = ch_info
-                else:
-                    ch_token = f"CS_{parsed.chapter_token}"
-                    ch_label = f"过场动画（{parsed.chapter_token}）"
-                    ch_order = 900
+                ch_token, ch_label, ch_order = cs_chapter(parsed.chapter_token)
             else:
                 ch_token = "Comic"
                 ch_label = "动态漫画"
@@ -560,7 +574,9 @@ def extract(
     stats.speaker_null = stats.total_lines - stats.speaker_lines
     for record in records:
         stats.by_family[record["family"]] = stats.by_family.get(record["family"], 0) + 1
-        stats.by_chapter[record["chapter_label"]] = stats.by_chapter.get(record["chapter_label"], 0) + 1
+        # Key by token: several chapters share a label (04/040, 05/050, 08/09/090),
+        # so a label-keyed counter silently merges them.
+        stats.by_chapter[record["chapter"]] = stats.by_chapter.get(record["chapter"], 0) + 1
 
     supplement.sort(
         key=lambda item: (
@@ -603,6 +619,14 @@ def extract(
     _assign_supplement_ids(supplement)
     stats.supplement_lines = len(supplement)
 
+    issues = validate_records(records, supplement)
+    errors = [issue for issue in issues if issue.level == "error"]
+    warnings = [issue for issue in issues if issue.level == "warning"]
+    if issues:
+        print(f"  validation: {len(errors)} error(s), {len(warnings)} warning(s)")
+        for issue in issues[:8]:
+            print(f"    {issue}")
+
     formats_set = {part.strip().lower() for part in formats.split(",") if part.strip()}
     if "jsonl" in formats_set:
         write_jsonl(records, out_dir / "story.jsonl")
@@ -638,6 +662,40 @@ def extract(
         except OSError:
             file_hashes[rel] = {"sha256": "", "bytes": 0}
 
+    chapter_rows: dict[str, dict] = {}
+    for record in records:
+        row = chapter_rows.setdefault(
+            record["chapter"],
+            {
+                "token": record["chapter"],
+                "label": record["chapter_label"],
+                "order": record["chapter_order"],
+                "known": chapter_info(record["chapter"]).known,
+                "lines": 0,
+                "supplement_lines": 0,
+            },
+        )
+        row["lines"] += 1
+    for item in supplement:
+        row = chapter_rows.setdefault(
+            item["chapter"],
+            {
+                "token": item["chapter"],
+                "label": item["chapter_label"],
+                "order": item["chapter_order"],
+                "known": chapter_info(item["chapter"]).known,
+                "lines": 0,
+                "supplement_lines": 0,
+            },
+        )
+        row["supplement_lines"] += 1
+    chapters_manifest = sorted(chapter_rows.values(), key=lambda row: (row["order"], row["token"]))
+    validation_manifest = {
+        "errors": len(errors),
+        "warnings": len(warnings),
+        "issues": [asdict(issue) for issue in issues],
+    }
+
     coverage = {
         "total_lines": stats.total_lines,
         "speaker_lines": stats.speaker_lines,
@@ -658,6 +716,8 @@ def extract(
         "supplement_lines": stats.supplement_lines,
         "speaker_stats": stats.speaker_stats,
         "lore_stats": lore_stats,
+        "chapters": chapters_manifest,
+        "validation": validation_manifest,
     }
     manifest = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -677,6 +737,9 @@ def extract(
             "gender_pair_filtered": stats.gender_pair_filtered,
             "lore": lore_stats,
         },
+        "chapter_numbering": "第N季第M章 => Chapter{(N-1)*100 + M*10}",
+        "chapters": chapters_manifest,
+        "validation": validation_manifest,
         "files": file_hashes,
     }
 
@@ -698,6 +761,12 @@ def extract(
             raise SystemExit(
                 f"speaker coverage {coverage_value:.1%} is below required {require_speakers:.1%}"
             )
+
+    if errors and strict:
+        raise SystemExit(
+            f"validation failed with {len(errors)} error(s); "
+            "see coverage.json for details, or rerun with --allow-issues to keep the output"
+        )
 
     return stats
 

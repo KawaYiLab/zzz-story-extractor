@@ -11,8 +11,8 @@
 | `story.jsonl` | 一行一句；含章节、场景、行号、说话人、文本、原始 TextMap 键、性别分支 |
 | `story.txt` | 按章节/场景分组的可读剧本 |
 | `supplement.jsonl` / `supplement.txt` | `Comic_*`、`CS_*` 补充文本（可选） |
-| `manifest.json` | 数据版本、来源哈希、计数、本地游戏版本 |
-| `coverage.json` | 说话人覆盖率、未解析别名、缺失文本、去重统计 |
+| `manifest.json` | 数据版本、来源哈希、计数、章节表（序号/标签/行数）、校验结果 |
+| `coverage.json` | 说话人覆盖率、未解析别名、缺失文本、去重统计、校验结果（`by_chapter` 以章节 token 为键，标签见 `manifest.json` 的 `chapters`） |
 
 实测 3.2.0 结果：45,376 条主线台词，20+ 章节；其中 32,931 条带说话人（Perform voiceKey 解析 21,842 条、探索提示配置补 3,795 条、头像名与场景推断补足其余）。有 voiceKey 的台词说话人覆盖率 **100%**。旁白、无配音选项、未解析 NPC 允许 `speaker=null`，并在 `coverage.json` 中单独统计。
 
@@ -82,6 +82,27 @@ python -m venv .venv
 ```powershell
 .\.venv\Scripts\python.exe -m zzz_story extract --refresh --refresh-speakers --out out
 ```
+
+## 校验输出
+
+```powershell
+.\.venv\Scripts\python.exe -m zzz_story verify --out out/zzz_story_3.2.0_chs
+```
+
+`extract` 结束时会自动跑同一套校验，结果写进 `coverage.json` 和 `manifest.json` 的 `validation` 字段；出现 `error` 级问题时默认以退出码 3 失败，加 `--allow-issues` 可以保留输出继续用。
+
+校验目前覆盖：
+
+- `supplement-chapter-shadow`：补充文本被挂到主线章节号上、但标题对不上——章节重新编号后最容易出的错（见下）；
+- `duplicate-line-id`：`line_id` 重复；
+- `chapter-label-conflict`：同一个章节 token 出现多个标题；
+- `unknown-chapter`：章节 token 不在 `chapters.py` 表内（warning，按编号规则推导标签）。
+
+## 章节编号
+
+3.2.0 的规则是 `第N季 第M章 -> Chapter{(N-1)*100 + M*10}`：`2.1 -> Chapter110`、`3.1 -> Chapter210`、将来的 `3.4 -> Chapter240`。
+
+`CS_*` 过场字幕的键名只带一个「季.章」前缀（如 `CS_21_01_010` 表示 2.1），所以以前靠手写映射表。3.2.0 把第二季从 2xx 挪到 1xx 之后，旧表仍把 `CS_21..25` 指向 `Chapter210..250`，结果第二季 1–5 章的过场字幕全部挂到了第三季 1–3 章上（等 3.4 上线时 `Chapter240` 还会再撞一次）。现在第二季以后统一由 `chapters.season_chapter_token()` 推导，第一季的非常规 token（`01.5`、`028`、`05.2`…）保留显式映射；`verify` 会在同类问题再次出现时直接报错。
 
 ## 上传到论坛后端（剧情库 MCP）
 
@@ -153,7 +174,7 @@ $env:IK_PASSWORD = "管理员密码"   # 不设则交互输入
 - 部分 NPC 的内部别名和英文名对不上，会被列为未解析别名；不会凭空猜测。
 - 只提取男主（哲）视角：以 `F` 结尾的女主分支键、女主版本的重复台词、以及含“师妹/铃小姐”等女主称呼且存在男主对应版本的台词都会被移除；“师弟/哲先生”这类男主称呼以及称呼潘引壶等 NPC 为“师弟”的台词全部保留。
 - 去重只合并主角双分支留下的重复行（两套分支段落、相邻重复）；NPC 在同一场景重复说的短句（如“……”）会保留。
-- 章节标签是 3.2.0 的内置映射；新版本出现未知 token 时保留原 token 并推导标签，不会丢数据。
+- 章节标签与顺序来自 `chapters.py` 的 3.2.0 表；新版本出现未知 token 时保留原 token 并按同一套编号规则推导标签，不会丢数据，校验里会给出 `unknown-chapter` 警告。
 - 游戏文本版权归米哈游所有；本工具只用于本地个人研究，请勿分发提取出的游戏文本。
 
 ## 开发与测试
@@ -176,6 +197,7 @@ zzz_story/
   perform.py    Perform CAB 字符串扫描
   speakers.py   voice 别名 → 中文名、缓存
   extract.py    主流程
+  validate.py   输出结构校验（章节挂载、重复 id）
   writers.py    JSONL/TXT/CSV 输出
   upload.py     打包语料并上传到论坛后端（剧情库 MCP）
   cli.py        命令行

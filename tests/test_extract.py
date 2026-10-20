@@ -34,6 +34,7 @@ def test_extract_fixture(tmp_path, monkeypatch):
         "CS_00_01_020": "过场台词一",
         "CS_00_01_030": "哥哥，可以开始吗？",
         "CS_00_01_040": "妹妹，可以开始吗？",
+        "CS_21_01_010": "第二季第一章过场",
     }
     _write(data / "TextMap/TextMapTemplateTb.json", text_map)
     _write(data / "TextMap/TextMapOverwriteTemplateTb.json", {})
@@ -73,7 +74,7 @@ def test_extract_fixture(tmp_path, monkeypatch):
     )
     assert stats.total_lines == 6
     assert stats.options_count == 2
-    assert stats.supplement_lines == 3
+    assert stats.supplement_lines == 4
 
     records = [
         json.loads(line)
@@ -107,11 +108,28 @@ def test_extract_fixture(tmp_path, monkeypatch):
     assert "妹妹，可以开始吗？" in supp_txt
     assert "哥哥，可以开始吗？" not in supp_txt  # male-only: Belle's version dropped
 
+    supplements = [
+        json.loads(line)
+        for line in (out / "supplement.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    season_two = [row for row in supplements if row["source_key"].startswith("CS_21_")]
+    assert len(season_two) == 1
+    # CS_21 is season 2 chapter 1, i.e. Chapter110 -- not Chapter210 (season 3).
+    assert season_two[0]["chapter"] == "Chapter110"
+    assert season_two[0]["chapter_label"] == "第二季 第一章 云霞同归处"
+
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["source_version"] == "3.2.0"
+    assert manifest["validation"]["errors"] == 0
+    chapters = {row["token"]: row for row in manifest["chapters"]}
+    assert chapters["Chapter110"]["supplement_lines"] == 1
+    assert chapters["Chapter110"]["order"] > chapters["Chapter00"]["order"]
     coverage = json.loads((out / "coverage.json").read_text(encoding="utf-8"))
     assert coverage["total_lines"] == 6
     assert coverage["options_count"] == 2
+    # Keyed by chapter token, not label: labels are not unique across chapters.
+    assert coverage["by_chapter"] == {"Chapter00": 5, "Chapter01": 1}
+    assert coverage["validation"]["errors"] == 0
 
 def _rec(line_no, text, speaker=None, scene="1", family="GalGame", line_type="dialogue"):
     return {

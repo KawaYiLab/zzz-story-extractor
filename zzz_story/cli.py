@@ -23,6 +23,7 @@ from .fetch import (
 from .lore import extract_lore
 from .textmap import load_text_map
 from .upload import UploadError, build_bundle, encode_bundle, upload
+from .validate import validate_output
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -48,6 +49,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="skip extracting worldbuilding lore (agents, equipment, interknot, cinema, etc.)",
     )
     extract_parser.add_argument("--limit", type=int, default=None, help="only process the first N line keys (debug)")
+    extract_parser.add_argument(
+        "--allow-issues",
+        action="store_true",
+        help="keep the output even if structural validation fails (see verify)",
+    )
+
+    verify_parser = sub.add_parser("verify", help="validate a finished extraction output")
+    verify_parser.add_argument("--out", type=Path, default=None, help="extraction output directory")
 
     lore_parser = sub.add_parser("extract-lore", help="extract only worldbuilding lore")
     lore_parser.add_argument("--lang", default="CHS", help="TextMap language (default: CHS)")
@@ -161,12 +170,30 @@ def _upload(args: argparse.Namespace, out: Path) -> int:
     return 0
 
 
+def _verify(out: Path) -> int:
+    if not out.exists():
+        print(f"error: 找不到输出目录 {out}", file=sys.stderr)
+        return 2
+    issues = validate_output(out)
+    if not issues:
+        print(f"OK: {out} 通过校验")
+        return 0
+    for issue in issues:
+        print(issue)
+    errors = sum(1 for issue in issues if issue.level == "error")
+    print(f"{len(issues)} issue(s), {errors} error(s)")
+    return 1 if errors else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "doctor":
         return _doctor(args)
+
+    if args.command == "verify":
+        return _verify(args.out or Path("out") / f"zzz_story_{DEFAULT_VERSION}_chs")
 
     out = args.out
     if out == Path("out"):
@@ -216,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
             dedupe=not args.no_dedupe,
             limit=args.limit,
             include_lore=not getattr(args, "no_lore", False),
+            strict=not getattr(args, "allow_issues", False),
         )
     except SystemExit as exc:
         print(exc)
