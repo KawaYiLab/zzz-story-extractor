@@ -83,6 +83,52 @@ def option_keys_from_cab(cab: bytes):
             yield values[index + 1]
 
 
+def scan_cab(cab: bytes):
+    """Scan one CAB after decoding its UTF-16 strings exactly once.
+
+    Perform blocks contain three independently useful relationships.  The
+    old scanner called :func:`utf16_ascii_strings` once for each relationship,
+    tripling the allocation and UTF-16 decoding cost for every CAB.  Keep the
+    same local parsing rules as the public helpers, but share the decoded
+    string table for the block scanner.
+
+    Returns ``(voice_links, avatar_links, option_keys)`` as lists.  The
+    public generator helpers above remain available for callers that only
+    need one relationship.
+    """
+    values = utf16_ascii_strings(cab)
+    links: list[tuple[str, str]] = []
+    avatars: list[tuple[str, str]] = []
+    options: list[str] = []
+    last_avatar: str | None = None
+    limit = len(values) - 1
+
+    for index, value in enumerate(values):
+        following = values[index + 1] if index < limit else ""
+
+        if value == "avatarName" and following and following not in ("nodeMark", "backgroundKey"):
+            last_avatar = following
+        elif value == "dialogueKey" and DIALOGUE_KEY_RE.match(following):
+            text_id = following
+            if last_avatar:
+                avatars.append((text_id, last_avatar))
+                last_avatar = None
+
+            for cursor in range(index + 2, min(index + 12, limit)):
+                if values[cursor] == "dialogueKey":
+                    break
+                if values[cursor] not in ("externalVoiceKey", "voiceKey"):
+                    continue
+                source = values[cursor + 1]
+                if SOURCE_RE.match(source):
+                    links.append((source, text_id))
+                break
+        elif value == "textKey" and DIALOGUE_KEY_RE.match(following):
+            options.append(following)
+
+    return links, avatars, options
+
+
 @dataclass
 class ScanStats:
     blocks: int = 0
@@ -116,10 +162,11 @@ def scan_perform_blocks(
         stats.mhy_files += 1
         for cab in files:
             stats.cab_files += 1
-            for source, text_id in dialogue_links_from_cab(cab):
+            links, avatars, options = scan_cab(cab)
+            for source, text_id in links:
                 stats.links += 1
                 source_to_text.setdefault(source, set()).add(text_id)
-            for text_id, avatar_name in avatar_links_from_cab(cab):
+            for text_id, avatar_name in avatars:
                 stats.avatar_links += 1
                 previous = avatar_to_text.get(text_id)
                 if previous is None:
@@ -127,7 +174,7 @@ def scan_perform_blocks(
                     stats.avatar_values += 1
                 elif previous != avatar_name:
                     ambiguous_avatar.add(text_id)
-            for opt_key in option_keys_from_cab(cab):
+            for opt_key in options:
                 if opt_key not in option_keys:
                     option_keys.add(opt_key)
                     stats.option_keys += 1

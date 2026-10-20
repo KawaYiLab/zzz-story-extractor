@@ -14,7 +14,7 @@
 | `manifest.json` | 数据版本、来源哈希、计数、章节表（序号/标签/行数）、校验结果 |
 | `coverage.json` | 说话人覆盖率、未解析别名、缺失文本、去重统计、校验结果（`by_chapter` 以章节 token 为键，标签见 `manifest.json` 的 `chapters`） |
 
-实测 3.2.0 结果：45,376 条主线台词，20+ 章节；其中 32,931 条带说话人（Perform voiceKey 解析 21,842 条、探索提示配置补 3,795 条、头像名与场景推断补足其余）。有 voiceKey 的台词说话人覆盖率 **100%**。旁白、无配音选项、未解析 NPC 允许 `speaker=null`，并在 `coverage.json` 中单独统计。
+实测 3.2.0 结果：44,444 条主线台词，20+ 章节；其中 32,120 条带说话人，有 voiceKey 的台词说话人覆盖率 **100%**。旁白、无配音选项、未解析 NPC 允许 `speaker=null`，并在 `coverage.json` 中单独统计。
 
 每章内部按内容类型分块排列（GalGame 主线 → 主线聊天 → 聊天 → 气泡 → 关卡内对话等）；GalGame 场景按游戏内“剧情回放”档案的官方顺序排列，并按官方任务名分节。类型之间的时间交错关系在公开数据中不存在，不做臆测。
 
@@ -75,6 +75,12 @@ python -m venv .venv
 
 # 覆盖率低于 95% 时以退出码 3 失败
 .\.venv\Scripts\python.exe -m zzz_story extract --require-speakers 0.95 --out out
+
+# 保留与正文相同的 raw_text（文件大约翻倍）
+.\.venv\Scripts\python.exe -m zzz_story extract --keep-raw --out out\full
+
+# 只抽某一章（约 4 秒；写到独立目录，自动跳过 lore）
+.\.venv\Scripts\python.exe -m zzz_story extract --only-chapter 230 --out out\ch230
 ```
 
 重新下载 TextMap 或重建说话人缓存：
@@ -97,6 +103,14 @@ python -m venv .venv
 - `duplicate-line-id`：`line_id` 重复；
 - `chapter-label-conflict`：同一个章节 token 出现多个标题；
 - `unknown-chapter`：章节 token 不在 `chapters.py` 表内（warning，按编号规则推导标签）。
+
+## 版本对比
+
+```powershell
+.\.venv\Scripts\python.exe -m zzz_story diff --old out\zzz_story_3.2.0_chs --new out\zzz_story_3.3.0_chs
+```
+
+按 `line_id` 逐行比较两个输出目录，给出每章的新增 / 删除 / 修改计数和前几条样例（`--examples 0` 只看计数）。`line_id` 只依赖章节 token，所以新版本在中间插入章节也不会把旧行误判成变化。
 
 ## 章节编号
 
@@ -125,13 +139,13 @@ $env:IK_PASSWORD = "管理员密码"   # 不设则交互输入
 - 文本与配置：Gitea 镜像 `https://git.mero.moe/dimbreath/ZenlessData`（3.2.0，优先），备用 GitHub 镜像 `https://github.com/malu-no996/ZenlessData`。除 TextMap 外还使用 PerformTemplateTb、ArchivePerformTemplateTb（剧情回放顺序）、QuestConfigTemplateTb（任务名）、OngoingTipsConfigTemplateTb（关卡内对话说话人）等配置表。
 - 本地游戏：自动探测 `D:\米哈游\miHoYo Launcher\games\ZenlessZoneZero Game`、HoYoPlay 常见目录和注册表；也可用 `--game-dir`。
 - 说话人：读取本地游戏的资源目录块和 17 个 Perform block，解析 `dialogueKey` 与 `externalVoiceKey/voiceKey`，再用 AvatarBase + 英文 TextMap 把内部别名映射成中文名。
-- 缓存默认位于 `data/cache/3.2.0/`。
+- 缓存默认位于 `data/cache/3.2.0/`；上游版本号（`source_version`）探测结果会缓存在 `data/cache/3.2.0/source_version.txt`，离线时不会卡 20 秒，也不会把失败结果写进缓存。
 
 ## JSONL 字段
 
 ```json
 {
-  "line_id": "CH17_110_GalGame_11100060_001",
+  "line_id": "CH110_GalGame_11100060_001",
   "chapter": "Chapter110",
   "chapter_label": "第二季 第一章 云霞同归处",
   "chapter_order": 17,
@@ -160,6 +174,8 @@ $env:IK_PASSWORD = "管理员密码"   # 不设则交互输入
 - `quest_name`：GalGame 场景所属的官方任务名（来自剧情回放档案 + 任务配置），不属于任何任务时为 `null`。
 - `speaker_confidence`：1.0（AvatarBase/英文名精确映射）、0.6（场景别名推断）、0.4（单名兜底）、0（未解析）。
 - `text_variants`：原文同时包含男/女主角分支且两版不同时才有值；`text` 固定为男主（哲）版本，只提取男主视角。女主（铃）作为 NPC（妹妹）出现在台词中。
+- `raw_text`：清洗前的 TextMap 原文；与 `text` 完全一致时写 `null`（约 95% 的行如此），`--keep-raw` 可强制保留。
+- `line_id`：`CH<章节 token>_<类型>_<场景>_<行号>`，只依赖 token，不随章节顺序变化；插入新章节不会让旧 id 漂移。
 - `line_type`：`dialogue`（有说话人）/ `option`（玩家选项）/ `narration`（场景有说话人数据，但这一行没有）/ `unknown`（有配音但没解析出说话人，或整个场景缺说话人数据，如 Bubble、Ongoing 系列）。
 - `scene_speakers`：该场景 `_Name_*` 提供的角色名单，已去掉“选项”“旁白”等非角色项。
 
@@ -171,8 +187,11 @@ $env:IK_PASSWORD = "管理员密码"   # 不设则交互输入
   - `Comic_*`、`CS_*` 放入 supplement，不混入主线章节。
   - 测试/占位表 `Chapter020`、`Chapter080`、`PortChapter110` 以及 `MainChat_2_*` 已排除。
 - 说话人只对“有 voiceKey 的台词”计算覆盖率；聊天、旁白、无配音选项本来就没有 voiceKey，允许为空。
+- `line_type=unknown` 表示“这一行没解析出说话人”。3.2.0 的 2,866 行几乎都来自**没有 Perform 语音链接的场景**（Bubble/Chat 等），不是别名表缺失——实测这些行的音频别名命中数为 0。
+- `coverage.speaker_stats.unresolved_aliases` 指“有配音、有别名、但仍映射不到中文名”的条目（3.2.0 为 372，集中在活动/代理人秘闻等主线外内容）；`ambiguous` 指同一行对应多个别名、放弃猜测的条目。
 - 部分 NPC 的内部别名和英文名对不上，会被列为未解析别名；不会凭空猜测。
 - 只提取男主（哲）视角：以 `F` 结尾的女主分支键、女主版本的重复台词、以及含“师妹/铃小姐”等女主称呼且存在男主对应版本的台词都会被移除；“师弟/哲先生”这类男主称呼以及称呼潘引壶等 NPC 为“师弟”的台词全部保留。
+- 分支折叠同时覆盖马甲形态：启动时从 TextMap 的 `GalNPC<形态>Belle` 名字自动推导形态表（当前为 玩家/学生/道士/泳装/佩洛伊斯，取不到时回退到内置列表），按“哲侧 / 铃侧”配对，仅在文本高度相似（≥0.82）时丢掉铃侧那一行；铃作为妹妹的独立对白不受影响。`门铃` 这类道具名不会被误判；出现未登记的新形态（`X哲`+`X铃` 成对）会在抽取日志里 warning。
 - 去重只合并主角双分支留下的重复行（两套分支段落、相邻重复）；NPC 在同一场景重复说的短句（如“……”）会保留。
 - 章节标签与顺序来自 `chapters.py` 的 3.2.0 表；新版本出现未知 token 时保留原 token 并按同一套编号规则推导标签，不会丢数据，校验里会给出 `unknown-chapter` 警告。
 - 游戏文本版权归米哈游所有；本工具只用于本地个人研究，请勿分发提取出的游戏文本。
@@ -198,6 +217,7 @@ zzz_story/
   speakers.py   voice 别名 → 中文名、缓存
   extract.py    主流程
   validate.py   输出结构校验（章节挂载、重复 id）
+  diff.py       两个输出目录的逐行对比
   writers.py    JSONL/TXT/CSV 输出
   upload.py     打包语料并上传到论坛后端（剧情库 MCP）
   cli.py        命令行

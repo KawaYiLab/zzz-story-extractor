@@ -9,6 +9,13 @@ from zzz_story.speakers import (
 import struct
 import xxhash
 
+from zzz_story.perform import (
+    avatar_links_from_cab,
+    dialogue_links_from_cab,
+    option_keys_from_cab,
+    scan_cab,
+)
+
 
 def test_alias_from_source():
     assert alias_from_source("GalGame_Chapter00_Susie_002_002") == "Susie"
@@ -77,3 +84,29 @@ def test_catalog_mapping():
     assert matched == 1
     assert 12345 in by_block
     assert path in by_block[12345]
+
+
+def test_scan_cab_matches_individual_scanners():
+    # CAB strings are UTF-16LE values separated by non-UTF16 bytes.  Keeping
+    # the fixture small makes it easy to compare the shared one-pass scanner
+    # with the three public compatibility helpers.
+    values = [
+        "avatarName",
+        "Avatar_Test",
+        "dialogueKey",
+        "Main_GalGame_Chapter00_10000001_001",
+        "externalVoiceKey",
+        "GalGame_Chapter00_Susie_001",
+        "textKey",
+        "Main_GalGame_Chapter00_10000001_Option1_01",
+        "avatarName",
+        "nodeMark",
+        "dialogueKey",
+        "Main_GalGame_Chapter00_10000001_002",
+    ]
+    cab = b"\xff".join(value.encode("utf-16le") for value in values)
+
+    links, avatars, options = scan_cab(cab)
+    assert links == list(dialogue_links_from_cab(cab))
+    assert avatars == list(avatar_links_from_cab(cab))
+    assert options == list(option_keys_from_cab(cab))

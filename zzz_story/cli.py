@@ -12,6 +12,7 @@ import requests
 
 from . import __version__
 from .catalog import Catalog, find_catalog_block, map_story_assets, story_asset_paths
+from .diff import diff_outputs, format_diff
 from .extract import extract
 from .fetch import (
     DEFAULT_VERSION,
@@ -50,13 +51,34 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     extract_parser.add_argument("--limit", type=int, default=None, help="only process the first N line keys (debug)")
     extract_parser.add_argument(
+        "--keep-raw",
+        action="store_true",
+        help="always write raw_text, even when it equals the cleaned text (larger output)",
+    )
+    extract_parser.add_argument(
+        "--only-chapter",
+        default=None,
+        metavar="TOKEN",
+        help="only extract these chapters, comma separated (e.g. 230 or 210,220); use a separate --out",
+    )
+    extract_parser.add_argument(
         "--allow-issues",
         action="store_true",
         help="keep the output even if structural validation fails (see verify)",
     )
+    extract_parser.add_argument(
+        "--accuracy-first",
+        action="store_true",
+        help="保留所有候选台词，关闭分支/重复行删除和场景名单猜测；适合做完整性校对",
+    )
 
     verify_parser = sub.add_parser("verify", help="validate a finished extraction output")
     verify_parser.add_argument("--out", type=Path, default=None, help="extraction output directory")
+
+    diff_parser = sub.add_parser("diff", help="compare two extraction outputs line by line")
+    diff_parser.add_argument("--old", type=Path, required=True, help="older output directory")
+    diff_parser.add_argument("--new", type=Path, required=True, help="newer output directory")
+    diff_parser.add_argument("--examples", type=int, default=3, help="example lines per chapter (0 = none)")
 
     lore_parser = sub.add_parser("extract-lore", help="extract only worldbuilding lore")
     lore_parser.add_argument("--lang", default="CHS", help="TextMap language (default: CHS)")
@@ -170,6 +192,22 @@ def _upload(args: argparse.Namespace, out: Path) -> int:
     return 0
 
 
+def _parse_chapter_filter(value: str | None) -> set[str] | None:
+    if not value:
+        return None
+    tokens = {part.strip() for part in value.split(",") if part.strip()}
+    return tokens or None
+
+
+def _diff(args: argparse.Namespace) -> int:
+    for path in (args.old, args.new):
+        if not (path / "story.jsonl").exists():
+            print(f"error: {path} 里没有 story.jsonl", file=sys.stderr)
+            return 2
+    print(format_diff(diff_outputs(args.old, args.new, examples=args.examples)))
+    return 0
+
+
 def _verify(out: Path) -> int:
     if not out.exists():
         print(f"error: 找不到输出目录 {out}", file=sys.stderr)
@@ -186,6 +224,14 @@ def _verify(out: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Chinese logs are unreadable when piped on a GBK Windows console unless
+    # stdout is pinned to UTF-8 (the files themselves are always UTF-8).
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:  # noqa: BLE001 - best effort only
+            pass
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -194,6 +240,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "verify":
         return _verify(args.out or Path("out") / f"zzz_story_{DEFAULT_VERSION}_chs")
+
+    if args.command == "diff":
+        return _diff(args)
 
     out = args.out
     if out == Path("out"):
@@ -244,6 +293,9 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             include_lore=not getattr(args, "no_lore", False),
             strict=not getattr(args, "allow_issues", False),
+            keep_raw=getattr(args, "keep_raw", False),
+            only_chapters=_parse_chapter_filter(getattr(args, "only_chapter", None)),
+            accuracy_first=getattr(args, "accuracy_first", False),
         )
     except SystemExit as exc:
         print(exc)

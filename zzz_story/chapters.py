@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
 
 # Explicit order also acts as the tie-breaker for tokens that share a chapter.
@@ -73,11 +74,13 @@ class ChapterInfo:
     known: bool
 
 
+@lru_cache(maxsize=512)
 def short_token(token: str) -> str:
     match = _CHAPTER_RE.match(token or "")
     return match.group("short") if match else (token or "")
 
 
+@lru_cache(maxsize=512)
 def chapter_info(token: str) -> ChapterInfo:
     short = short_token(token)
     if short in _INDEX:

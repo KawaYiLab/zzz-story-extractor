@@ -126,7 +126,24 @@ def download_file(rel_path: str, destination: Path, refresh: bool = False) -> Pa
     raise RuntimeError("could not download " + rel_path + "\n" + "\n".join(errors))
 
 
-def fetch_source_version() -> str:
+SOURCE_VERSION_CACHE = "source_version.txt"
+
+
+def fetch_source_version(cache_dir: Path | None = None, refresh: bool = False) -> str:
+    """Latest ZenlessData version tag.
+
+    The lookup costs a network round-trip (and up to 20s of timeout when
+    offline), so the answer is cached next to the data and only refreshed
+    explicitly.  A failed lookup is never cached, otherwise a single offline
+    run would pin a stale version forever.
+    """
+    cached = cache_dir / SOURCE_VERSION_CACHE if cache_dir else None
+    if cached is not None and cached.exists() and not refresh:
+        value = cached.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+
+    version = ""
     try:
         response = requests.get(
             f"{GITEA_API}/commits?limit=1",
@@ -138,10 +155,16 @@ def fetch_source_version() -> str:
         message = payload[0]["commit"]["message"] if payload else ""
         match = re.search(r"(?:Win|REL)(\d+\.\d+\.\d+)", message, re.IGNORECASE)
         if match:
-            return match.group(1)
+            version = match.group(1)
     except Exception:  # noqa: BLE001 - metadata only
         pass
-    return DEFAULT_VERSION
+
+    if not version:
+        return DEFAULT_VERSION
+    if cached is not None:
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        cached.write_text(version + "\n", encoding="utf-8")
+    return version
 
 
 def _language_files(lang: str) -> list[str]:

@@ -241,10 +241,16 @@ def canonical_text_id(value: str) -> str:
 
 
 def _normalized_key_index(text_keys: set[str]) -> dict[str, str]:
-    index: dict[str, str] = {}
+    buckets: dict[str, list[str]] = {}
     for key in text_keys:
-        index.setdefault(canonical_text_id(key), key)
-    return index
+        buckets.setdefault(canonical_text_id(key), []).append(key)
+    # A canonical collision is ambiguous. Returning one arbitrary set member
+    # made speaker assignment depend on hash iteration order.
+    return {
+        canonical: values[0]
+        for canonical, values in buckets.items()
+        if len(values) == 1
+    }
 
 
 def ongoing_tips_speakers(
@@ -336,7 +342,21 @@ def build_speaker_index(
                 bool(info and info.has_voice),
             )
             stats.tips_speakers += 1
+    _recount_speaker_gaps(speakers, stats)
     return _index_from_speakers(speakers, text_keys, stats, option_keys), stats
+
+
+def _recount_speaker_gaps(speakers: dict[str, SpeakerInfo], stats: SpeakerStats) -> None:
+    """Recount gaps after the avatar/tips passes.
+
+    ``unresolved_aliases`` and ``ambiguous`` used to be incremented while
+    scanning Perform links and never adjusted, so the reported numbers counted
+    entries that a later pass had already resolved (3.2.0 reported 810 where
+    only 372 were left).  Recounting keeps ``coverage.json`` honest.
+    """
+    voiced = [info for info in speakers.values() if info.has_voice and not info.speaker]
+    stats.unresolved_aliases = sum(1 for info in voiced if info.alias)
+    stats.ambiguous = sum(1 for info in voiced if not info.alias)
 
 
 def _perform_speakers(
@@ -415,11 +435,16 @@ def _perform_speakers(
 
     speakers: dict[str, SpeakerInfo] = {}
     for text_id, infos in text_to_infos.items():
-        named = {(speaker, alias) for speaker, alias, _ in infos if speaker}
-        if len(named) == 1:
-            speaker, alias = next(iter(named))
+        # Multiple voice banks can point at one text id. Distinct aliases do
+        # not imply distinct speakers: a character may have a skin/voice-bank
+        # alias. Only disagreeing resolved display names are ambiguous.
+        named_speakers = {speaker for speaker, _, _ in infos if speaker}
+        if len(named_speakers) == 1:
+            speaker = next(iter(named_speakers))
+            aliases = {alias for resolved, alias, _ in infos if resolved == speaker and alias}
+            alias = next(iter(aliases)) if len(aliases) == 1 else None
             speakers[text_id] = SpeakerInfo(speaker, alias, 1.0, "voice", True)
-        elif len(named) > 1:
+        elif len(named_speakers) > 1:
             stats.ambiguous += 1
             speakers[text_id] = SpeakerInfo(None, None, 0.0, "voice", True)
         else:
@@ -436,12 +461,21 @@ def _perform_speakers(
     # TextMap key in most cases, which gives a direct speaker even for
     # unvoiced Chat/MainChat lines.
     for text_id, avatar_name in avatar_to_text.items():
-        if text_id in speakers and speakers[text_id].speaker:
+        existing = speakers.get(text_id)
+        if existing and existing.speaker:
             continue
         display = text_map.get(avatar_name) or resolve_alias(avatar_name, alias_map)
         if not display:
             continue
-        speakers[text_id] = SpeakerInfo(display, avatar_name, 0.95, "avatar", False)
+        # Keep the voice bit when avatar data resolves an otherwise unresolved
+        # voice line; coverage must not silently turn it into an unvoiced line.
+        speakers[text_id] = SpeakerInfo(
+            display,
+            avatar_name,
+            0.95,
+            "avatar",
+            bool(existing and existing.has_voice),
+        )
         stats.avatar_speakers += 1
 
     stats.text_ids = len(speakers)
@@ -503,6 +537,8 @@ class SpeakerIndex:
         return self._key_info.get(key)
 
     def is_option(self, key: str) -> bool:
+        if not self._options:
+            return False
         if key in self._options:
             return True
         return canonical_text_id(key) in self._canonical_options

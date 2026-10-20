@@ -117,10 +117,13 @@ def map_story_assets(catalog: Catalog, asset_paths: set[str]) -> tuple[dict[int,
         full = ("assets/napresources/" + path).lower()
         wanted[xxhash.xxh64(full.encode("utf-8")).intdigest()] = path
 
-    block_by_hash, matched = catalog.block_for_asset_hash(set(wanted))
-    by_block: dict[int, set[str]] = {block_id: set() for block_id in block_by_hash}
-
-    # Re-scan for the per-block path assignment.
+    # Resolve the matched asset, bundle and block in one table pass.  The old
+    # implementation first scanned every asset to discover matching blocks,
+    # then scanned the same asset table again to assign paths to those blocks.
+    # The catalog is large (500k+ assets), so retaining the path while doing
+    # the first lookup avoids a full second pass.
+    by_block: dict[int, set[str]] = {}
+    matched = 0
     for index in range(catalog.asset_count):
         offset = catalog.assets_start + index * 12
         bundle_index = struct.unpack_from("<I", catalog.raw, offset)[0]
@@ -128,6 +131,7 @@ def map_story_assets(catalog: Catalog, asset_paths: set[str]) -> tuple[dict[int,
         path = wanted.get(asset_hash)
         if path is None:
             continue
+        matched += 1
         if bundle_index >= catalog.bundle_count:
             continue
         bundle_offset = catalog.bundles_start + bundle_index * 28

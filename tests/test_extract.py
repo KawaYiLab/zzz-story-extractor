@@ -1,11 +1,21 @@
 import json
 
+import pytest
+
 from zzz_story.extract import (
+    DEFAULT_COSTUME_PREFIXES,
+    _assign_line_ids,
+    _cache_root,
+    _collapse_gender_pairs,
     _dedupe_records,
     _galgame_scene_positions,
     _filter_branch_lines,
     _mark_unattributed_scenes,
     _normalize_speaker,
+    _protagonist_side,
+    _record_raw_text,
+    _unknown_costume_forms,
+    costume_prefixes,
     extract,
 )
 from zzz_story.fetch import REQUIRED_FILES
@@ -62,7 +72,7 @@ def test_extract_fixture(tmp_path, monkeypatch):
         else:
             _write(path, {})
 
-    monkeypatch.setattr("zzz_story.extract.fetch_source_version", lambda: "3.2.0")
+    monkeypatch.setattr("zzz_story.extract.fetch_source_version", lambda *args, **kwargs: "3.2.0")
     out = tmp_path / "out"
     stats = extract(
         out_dir=out,
@@ -130,6 +140,74 @@ def test_extract_fixture(tmp_path, monkeypatch):
     # Keyed by chapter token, not label: labels are not unique across chapters.
     assert coverage["by_chapter"] == {"Chapter00": 5, "Chapter01": 1}
     assert coverage["validation"]["errors"] == 0
+    # Plain fixture lines clean to themselves, so raw_text is omitted.
+    assert all(record["raw_text"] is None for record in records)
+    assert coverage["raw_text_omitted"] == 6
+    # Stable ids: chapter token only, no chapter_order prefix.
+    assert all(record["line_id"].startswith(("CH00_", "CH01_")) for record in records)
+    # The manifest must not leak the local game path.
+    assert "\\" not in manifest["game_dir"] and "/" not in manifest["game_dir"]
+
+    # --only-chapter keeps just the requested chapter; lore is skipped.
+    partial = tmp_path / "partial"
+    partial_stats = extract(
+        out_dir=partial,
+        data_dir=data,
+        game_dir=tmp_path / "nogame",
+        no_speakers=True,
+        include_supplement=True,
+        formats="jsonl,txt",
+        include_lore=False,
+        only_chapters={"01"},
+    )
+    assert partial_stats.total_lines == 1
+    partial_manifest = json.loads((partial / "manifest.json").read_text(encoding="utf-8"))
+    assert partial_manifest["chapter_filter"] == ["Chapter01"]
+    assert partial_manifest["chapters"][0]["token"] == "Chapter01"
+
+    # Accuracy-first mode keeps both branch candidates and raw source text so
+    # a reviewer can decide what belongs in a curated male-only corpus.
+    accurate = tmp_path / "accurate"
+    accurate_stats = extract(
+        out_dir=accurate,
+        data_dir=data,
+        game_dir=tmp_path / "nogame",
+        no_speakers=True,
+        include_supplement=True,
+        formats="jsonl",
+        include_lore=False,
+        accuracy_first=True,
+    )
+    assert accurate_stats.branch_filtered == 0
+    assert accurate_stats.gender_pair_filtered == 0
+    assert accurate_stats.deduped == 0
+    accurate_manifest = json.loads((accurate / "manifest.json").read_text(encoding="utf-8"))
+    assert accurate_manifest["accuracy_first"] is True
+    accurate_records = [
+        json.loads(line)
+        for line in (accurate / "story.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert all(record["raw_text"] is not None for record in accurate_records)
+
+    with pytest.raises(SystemExit):
+        extract(
+            out_dir=tmp_path / "empty",
+            data_dir=data,
+            game_dir=tmp_path / "nogame",
+            no_speakers=True,
+            include_supplement=False,
+            include_lore=False,
+            only_chapters={"999"},
+        )
+
+
+def test_cache_root_isolated_for_custom_dataset(tmp_path):
+    default = _cache_root(None, "CHS")
+    custom = _cache_root(tmp_path, "CHS")
+    english = _cache_root(None, "EN")
+    assert custom != default
+    assert english != default
+    assert _cache_root(tmp_path, "CHS") == custom
 
 def _rec(line_no, text, speaker=None, scene="1", family="GalGame", line_type="dialogue"):
     return {
@@ -314,3 +392,111 @@ def test_ongoing_tips_speakers(tmp_path):
 
     no_file = ongoing_tips_speakers({}, FakeMap(), {}, "F")
     assert no_file == {}
+
+
+def test_protagonist_side_covers_costumes_but_not_props():
+    assert _protagonist_side("哲") == "M"
+    assert _protagonist_side("铃") == "F"
+    # Every form in the game's GalNPC<Form>Belle / <Form>Wise table.
+    for prefix in ("玩家", "学生", "道士", "泳装", "佩洛伊斯"):
+        assert _protagonist_side(prefix + "哲") == "M"
+        assert _protagonist_side(prefix + "铃") == "F"
+    # A doorbell is not the female protagonist.
+    assert _protagonist_side("门铃") is None
+    assert _protagonist_side(None) is None
+
+
+def test_gender_pair_collapses_costume_forms():
+    records = [
+        _rec(1, "我记起来了，船长也说过这件事。", "道士铃"),
+        _rec(2, "我记起来了，船长也说过这件事。", "道士哲"),
+    ]
+    kept, dropped = _collapse_gender_pairs(records, "M")
+    assert dropped == 1
+    assert [record["speaker"] for record in kept] == ["道士哲"]
+
+
+def test_gender_pair_collapses_sutando_forms():
+    # 佩洛伊斯铃 is the game's own "stand-in Belle" form, not a prop.
+    records = [
+        _rec(1, "……", "佩洛伊斯铃"),
+        _rec(2, "……", "佩洛伊斯哲"),
+    ]
+    kept, dropped = _collapse_gender_pairs(records, "M")
+    assert dropped == 1
+    assert [record["speaker"] for record in kept] == ["佩洛伊斯哲"]
+
+
+def test_gender_pair_keeps_distinct_sibling_lines():
+    records = [
+        _rec(1, "哥哥，我先去工坊了。", "学生铃"),
+        _rec(2, "师父让我们在观里等消息。", "学生哲"),
+    ]
+    kept, dropped = _collapse_gender_pairs(records, "M")
+    assert dropped == 0
+    assert len(kept) == 2
+
+
+def test_costume_prefixes_come_from_the_textmap():
+    text_map = {
+        "GalNPCBelle": "铃",
+        "GalNPCSutandoBelle": "佩洛伊斯铃",
+        "GalNPCStudentBelle": "学生铃",
+        "GalNPCPlayerBelle": "玩家铃",
+        "GalNPCBelleEvelyn": "铃&伊芙琳",
+    }
+    assert costume_prefixes(text_map) == frozenset({"佩洛伊斯", "学生", "玩家"})
+
+
+def test_costume_prefixes_fall_back_when_keys_are_missing():
+    assert costume_prefixes({}) == DEFAULT_COSTUME_PREFIXES
+
+
+def test_protagonist_side_accepts_a_new_costume_form():
+    assert _protagonist_side("幼年哲", frozenset({"幼年"})) == "M"
+    assert _protagonist_side("幼年铃", frozenset({"幼年"})) == "F"
+    # Without the derived set the form stays unknown.
+    assert _protagonist_side("幼年哲") is None
+
+
+def test_unknown_costume_forms_only_reports_pairs():
+    records = [
+        {"speaker": "幼年哲"},
+        {"speaker": "幼年铃"},
+        {"speaker": "门铃"},
+        {"speaker": "哲"},
+    ]
+    assert _unknown_costume_forms(records, DEFAULT_COSTUME_PREFIXES) == {
+        "幼年哲": 1,
+        "幼年铃": 1,
+    }
+
+
+def test_gender_pair_collapses_with_a_derived_costume_set():
+    records = [
+        _rec(1, "走吧，师父在等我们。", "幼年铃"),
+        _rec(2, "走吧，师父在等我们。", "幼年哲"),
+    ]
+    kept, dropped = _collapse_gender_pairs(records, "M", frozenset({"幼年"}))
+    assert dropped == 1
+    assert [record["speaker"] for record in kept] == ["幼年哲"]
+
+
+def test_raw_text_is_kept_only_when_cleaning_changed_it():
+    assert _record_raw_text("你好", "你好", keep_raw=False) is None
+    assert _record_raw_text("<b>你好</b>", "你好", keep_raw=False) == "<b>你好</b>"
+    assert _record_raw_text("你好", "你好", keep_raw=True) == "你好"
+
+
+def test_line_id_does_not_depend_on_chapter_order():
+    records = [_rec(1, "你好", "仪玄")]
+    records[0]["chapter"] = "Chapter110"
+    records[0]["chapter_order"] = 17
+    _assign_line_ids(records)
+    first = records[0]["line_id"]
+    # Simulate inserting a chapter earlier in the table: the order shifts,
+    # the id must not.
+    records[0]["chapter_order"] = 42
+    _assign_line_ids(records)
+    assert records[0]["line_id"] == first
+    assert first.startswith("CH110_GalGame_")
