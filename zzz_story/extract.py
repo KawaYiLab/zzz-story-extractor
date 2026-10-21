@@ -31,6 +31,7 @@ from .fetch import (
 )
 from .keys import ParsedKey, natural_scene_key, parse_key
 from .lore import extract_lore
+from .narrative import annotate_attribution, annotate_content, annotate_local_order, attribution_summary
 from .speakers import _MANUAL_ALIASES, SpeakerInfo, build_speaker_index, normalize_name
 from .textmap import TextMap, load_text_map
 from .validate import validate_records
@@ -72,7 +73,7 @@ FAMILY_ORDER = {
     "OngoingAntique": 10,
 }
 
-NAME_IGNORE = {"选项", "玩家选项", "旁白", "咨询", "购买", "找零"}
+NAME_IGNORE = {"选项", "玩家选项", "旁白"}
 OPTION_SPEAKERS = {"选项", "玩家选项"}
 PLAYER_NAMES = {"铃", "哲"}
 # Explicit male forms of address; lines using them are male-branch content.
@@ -266,6 +267,11 @@ def _galgame_scene_positions(scenes: list[str], scene_order: dict[str, tuple[int
         slot = bisect.bisect_left(numbers, int(scene))
         low = by_number[slot - 1][1] if slot else by_number[0][1] - 1.0
         high = by_number[slot][1] if slot < len(by_number) else by_number[-1][1] + 1.0
+        if high <= low:
+            # Numeric neighbours can appear in reverse archive order. That
+            # gives no usable insertion interval; keep the scene in fallback.
+            rest.append(scene)
+            continue
         pending.setdefault((low, high), []).append(scene)
     for (low, high), group in pending.items():
         group.sort(key=int)
@@ -286,6 +292,7 @@ def _line_sort_key(record: dict, scene_positions: dict[tuple[str, str], float]) 
         info.order,
         FAMILY_ORDER.get(record["family"], 50),
         scene_key,
+        record.get("_local_order", (record["line_no"], record["sub_no"] or 0)),
         record["line_no"],
         record["sub_no"] or 0,
         record["variant"] or "",
@@ -388,7 +395,7 @@ def extract(
     # Refuse reserved output paths before writing anything. Reusing a folder
     # can combine new manifests with stale JSONL, chapters or lore.
     reserved = ("story.jsonl", "story.txt", "story.csv", "supplement.jsonl", "supplement.txt",
-                "chapters", "lore", "discarded.jsonl", "name_candidates.jsonl", "coverage.json", "manifest.json")
+                "chapters", "lore", "discarded.jsonl", "name_candidates.jsonl", "speaker-gaps.jsonl", "placeholder-records.jsonl", "coverage.json", "manifest.json")
     if any((out_dir / name).exists() for name in reserved):
         raise FileExistsError(f"输出目录已有提取产物：{out_dir}；请指定新的 --out 目录")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -682,6 +689,8 @@ def extract(
     all_story_records = list(records)
 
     _mark_unattributed_scenes(records)
+    annotate_attribution(records)
+    annotate_content(records)
 
     if not accuracy_first:
         records, dropped = _filter_perform_routes(records)
@@ -708,21 +717,27 @@ def extract(
         for scene, position in _galgame_scene_positions(scenes, scene_order).items():
             scene_positions[(chapter, scene)] = position
     for record in records:
-        if record["family"] == "GalGame" and record["archive_order"] is None and (record["chapter"], record["scene"]) in scene_positions:
+        position = scene_positions.get((record["chapter"], record["scene"]))
+        archived_count = sum(scene in scene_order for scene in galgame_scenes.get(record["chapter"], []))
+        if record["family"] == "GalGame" and record["archive_order"] is None and position is not None and position < archived_count:
             record["order_source"] = "archive_interpolation"
+    annotate_local_order(records)
     records.sort(key=lambda record: _line_sort_key(record, scene_positions))
+    for record in records:
+        record.pop("_local_order", None)
     if dedupe and not accuracy_first:
         records, dropped = _dedupe_records(records, "M", costumes=costumes)
         stats.deduped += dropped
 
-    scene_acts_by_chapter: dict[str, dict[str, int]] = {}
+    scene_acts_by_chapter: dict[str, dict[tuple[str, str], int]] = {}
     for record in records:
         chapter = record["chapter"]
         scene = record["scene"]
         acts = scene_acts_by_chapter.setdefault(chapter, {})
-        if scene not in acts:
-            acts[scene] = len(acts) + 1
-        record["scene_act"] = acts[scene]
+        scene_key = (record["family"], scene)
+        if scene_key not in acts:
+            acts[scene_key] = len(acts) + 1
+        record["scene_act"] = acts[scene_key]
         title = (
             scene_titles.get(scene)
             or scene_titles.get(scene.lstrip("0"))
@@ -824,6 +839,8 @@ def extract(
     # Every heuristic removal is retained in a reviewable sidecar. Accuracy
     # first mode produces an empty file, which is itself a useful assertion.
     write_jsonl(discarded, out_dir / "discarded.jsonl")
+    write_jsonl((record for record in records if record.get("speaker_status") == "unresolved"), out_dir / "speaker-gaps.jsonl")
+    write_jsonl((record for record in records if record.get("content_status") == "reviewed_placeholder"), out_dir / "placeholder-records.jsonl")
     if accuracy_first:
         write_jsonl(name_candidates, out_dir / "name_candidates.jsonl")
 
@@ -908,6 +925,8 @@ def extract(
         "raw_text_omitted": stats.raw_text_omitted,
         "supplement_lines": stats.supplement_lines,
         "speaker_stats": stats.speaker_stats,
+        "attribution": attribution_summary(records),
+        "reviewed_placeholder_lines": sum(record.get("content_status") == "reviewed_placeholder" for record in records),
         "accuracy_first": accuracy_first,
         "ordering": {"mode": "catalog", "chronology_status": "unknown"},
         "quality": quality,
@@ -954,6 +973,8 @@ def extract(
         "chapters": chapters_manifest,
         "validation": validation_manifest,
         "files": file_hashes,
+        "attribution": attribution_summary(records),
+        "reviewed_placeholder_lines": sum(record.get("content_status") == "reviewed_placeholder" for record in records),
     }
 
     write_json(out_dir / "coverage.json", coverage)
@@ -1492,6 +1513,12 @@ def _write_csv(records: list[dict], path: Path) -> None:
         "speaker_alias",
         "speaker_confidence",
         "speaker_source",
+        "source_attribution",
+        "content_status",
+        "content_evidence",
+        "speaker_status",
+        "speaker_gap_reason",
+        "speaker_slot",
         "has_voice",
         "text",
         "raw_text",
@@ -1503,6 +1530,8 @@ def _write_csv(records: list[dict], path: Path) -> None:
         "scene_speakers",
         "order",
         "order_source",
+        "line_order_source",
+        "line_order_status",
         "chronology_status",
         "archive_order",
         "quest_id",
@@ -1519,5 +1548,7 @@ def _write_csv(records: list[dict], path: Path) -> None:
             row["text_variants"] = json.dumps(row["text_variants"], ensure_ascii=False) if row["text_variants"] else ""
             row["timeline"] = json.dumps(row["timeline"], ensure_ascii=False) if row.get("timeline") else ""
             row["perform"] = json.dumps(row["perform"], ensure_ascii=False) if row.get("perform") else ""
+            for field in ("source_attribution", "content_evidence"):
+                row[field] = json.dumps(row[field], ensure_ascii=False) if row.get(field) else ""
             row["scene_speakers"] = "、".join(row["scene_speakers"])
             writer.writerow(row)

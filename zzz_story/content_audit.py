@@ -11,6 +11,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from .validate import validate_output
+from .narrative import attribution_summary
 from .writers import write_chapter_files, write_story_txt, write_supplement_txt, _atomic_write_text
 
 
@@ -53,7 +54,7 @@ def export_errors(output: Path, story: list[dict], supplement: list[dict]) -> li
                     errors.append(f"CSV {field} differs: {expected['source_key']}")
             if actual.get("scene_speakers", "") != "、".join(expected.get("scene_speakers") or []):
                 errors.append(f"CSV scene_speakers differs: {expected['source_key']}")
-            for field in ("perform", "timeline", "text_variants"):
+            for field in ("perform", "timeline", "text_variants", "source_attribution", "content_evidence"):
                 value = actual.get(field, "")
                 try:
                     decoded = json.loads(value) if value else None
@@ -111,7 +112,9 @@ def audit(output: Path, *, baseline: Path | None = None, cache: Path | None = No
     lore_pairs = [{"source_keys": [a["source_key"], b["source_key"]], "text": b["text"]}
                   for a, b in zip(lore_retained, lore_retained[1:]) if a["text"] == b["text"]]
     gaps = [{"chapter": group[0], "family": group[1], "scene": group[2], "lines": len(rows)}
-            for group, rows in groups.items() if not any(r["speaker"] for r in rows)]
+            for group, rows in groups.items() if not any(r["speaker"] for r in rows)
+            and any(r.get("speaker_status") == "unresolved" if "speaker_status" in r
+                    else r.get("line_type") == "unknown" for r in rows)]
     unreferenced = []
     for group, rows in groups.items():
         if group[1] != "GalGame":
@@ -157,9 +160,11 @@ def audit(output: Path, *, baseline: Path | None = None, cache: Path | None = No
                          "lore_dialogue_candidates": len(lore_dialogues), "lore_dialogue_retained": len(lore_retained),
                          "lore_dialogue_equal_pairs": len(lore_pairs),
                          "structured_assets": len(inventory), "text_anomalies": len(anomalies), "export_errors": len(errors)},
+            "reviewed_placeholders": [row for row in story if row.get("content_status") == "reviewed_placeholder"],
             "notes": ["相邻同文是待核对信号，不等同于提取错误；选项与回答、停顿和真实重复必须保留。",
                       "未引用文本可能来自旧版本、子剧情、外部时间轴或缺失资源；不能仅凭未引用删除。",
                       "本文核验目录结构、原文保存及本地资源证据，不声称已确认所有运行时播放路径。"],
+            "attribution": attribution_summary(story),
             "export_errors": errors, "repeated_pairs": repeats, "unattributed_scenes": gaps,
             "unreferenced_scene_candidates": unreferenced, "text_anomalies": anomalies, "changes": change,
             "supplement_repeated_pairs": supplement_repeats, "lore_repeated_lines": lore_repeats,

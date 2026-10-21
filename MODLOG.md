@@ -201,3 +201,68 @@ resources, external timelines and runtime chronology remain limitations.
 See `docs/full-content-review-2026-10-21.md` and output content-audit files.
 Several intermediate output folders are preserved, including failed lore
 generation attempts; use only the final complete/complete_audit pair.
+
+## 2026-10-21 Mainline architecture and attribution review
+
+Confirmed that TextMap-key catalog ordering is not playback execution.
+Offline inspection of 4,964 configured main-story assets found 1,277 bubble
+nodes using Speaker/Text/Voice and 14,650 MainCityChatPlayStoryNode instances
+without serialized address fields. These layouts were absent from typed
+parsing. Added per-occurrence positions, node types, names, actor bindings,
+voice keys and bubble timing. Main_Chat_Chapter01_40100031 plays key 03 at
+0 ms, key 01 at 3000 ms, key 02 at 6000 ms: numeric ordering was reversed.
+Only unambiguous, fully covered single-section bubbles use local timing.
+
+Removed actual Bangboo names 咨询/购买/找零 from global non-character filters.
+Added Timeline_Csr, Ongoing and bubble/chat voice alias layouts, black-screen
+text lists and ChatPlus fields. Compare resolved display names across keys;
+typed empty fields do not inherit nearby-string identities. Sound events in
+voice fields do not count as voices. Unknown actor slots remain unbound.
+
+Final outputs supersede the earlier complete pair for this review:
+out/architecture_review_final_3.3.0 and matching _audit. 161 tests pass;
+both outputs validate and render consistently. All 57,928 candidates retain
+raw text, stable IDs and accounted destinations (51,478 kept / 6,450 removed
+lines / 5 removed names). 80 previously unnamed retained lines regain names,
+no existing named retained line loses attribution. Unknown 3,088 -> 2,298;
+1,203 unbound slots, 947 missing typed references, 143 nameless nodes,
+4 conflicting display names and 1 unresolved display key remain. 5,781
+typed assets, zero parse failures. 726 groups use local bubble timing; two
+groups change relative line order. Runtime cross-scene execution remains
+unknown. See docs/mainline-architecture-review-2026-10-21.md.
+
+## Follow-up: Chapter240 acts 32-34 are scene outlines
+
+User identified the incorrect Anby attribution at story.txt line 71446.
+Checked exact raw assets 124000032/33/34: their display names really are
+Anby; act 32 uses actorId 1011 and Anby model keys, acts 32/33 have Anby
+voice-key strings. Text values are scene-writing summaries and transition
+instructions; configured resource metadata does not establish real dialogue
+or playback. The previous structural review missed this distinction.
+
+Five reviewed source keys are now marked placeholder using source-key and
+raw-text SHA-256 matches, never broad keyword or character-name filtering.
+Retain text, IDs, full resource evidence and source_attribution, remove
+actual speaker/cast claims, and render explicit scene-outline labels.
+Added placeholder-records.jsonl and regression validation. Updated the
+opened final output and matching accuracy output in place with backups in
+before_placeholder_review. 165 tests pass; all 57,928 candidate texts, IDs
+and destinations still reconcile. No replacement speaker is inferred.
+
+## 2026-10-22 Follow-up: Chapter240 acts 36-37 lack resource linkage
+
+Scenes 124000036/37 retain 9/17 dialogue candidates. Their configured
+GalGame asset paths match neither the persistent nor base local catalog;
+no cached Perform/Timeline linkage identifies per-line actors or branches.
+Scene Name keys list names but do not verify actual cast. Five adjacent
+equal pairs and the separate Belle/Wise address versions remain intact.
+Playback and placement remain unverified; these are not reviewed outlines.
+
+Render fully unknown, unreferenced scenes with a name-table heading and
+an explicit candidate-order notice. Existing referenced or named scenes
+retain their presentation. Re-rendered both final TXT outputs and all
+chapters with backups in before_unlinked_scene_review; JSONL, CSV and
+record text/order/IDs are unchanged. 169 tests pass, including duplicate
+and address-version preservation and isolation of scene evidence. Both
+full audits report zero export errors or text anomalies; all 57,928
+candidate texts, stable IDs and destinations reconcile.

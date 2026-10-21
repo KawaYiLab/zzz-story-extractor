@@ -6,6 +6,15 @@
 
 默认目录：`out/zzz_story_3.3.0_chs/`
 
+最新架构检查结果在 `out/architecture_review_final_3.3.0/`，完整性版为同名 `_audit` 目录。
+恢复 80 条已有台词的角色标注，unknown 从 3,088 条降到 2,298 条；保留原文与旧输出。
+气泡和旧聊天现读取结构化节点，局部时间字段修正 2 个场景的台词先后。
+跨场景主线执行顺序仍未恢复。详细证据及后续设计见 [架构检查报告](docs/mainline-architecture-review-2026-10-21.md)。
+下文的 complete 目录和对应数字是本轮之前的历史结果；最新主线为 46,873 条、补充 4,605 条。
+
+用户复核发现 Chapter240 第 32～34 幕的 5 条概述混入“安比对白”。已标为剧情占位说明，
+保留原文及原始资源姓名，移除正式对白署名；详见架构报告的补充核查。
+
 本次全量检查后的结果在 `out/zzz_story_3.3.0_chs_complete/`，完整性审计版在 `out/zzz_story_3.3.0_chs_complete_audit/`。检查报告为 `content-audit.md` / `content-audit.json`。旧输出保留不覆盖。
 
 | 文件 | 内容 |
@@ -15,6 +24,8 @@
 | `supplement.jsonl` / `supplement.txt` | `Comic_*`、`CS_*` 补充文本（可选） |
 | `manifest.json` | 数据版本、来源哈希、计数、章节表（序号/标签/行数）、校验结果 |
 | `coverage.json` | 说话人覆盖率、未解析别名、缺失文本、去重统计、校验结果（`by_chapter` 以章节 token 为键，标签见 `manifest.json` 的 `chapters`） |
+| `speaker-gaps.jsonl` | 未解决角色的逐行证据，区分无引用、局部槽位未绑定、缺姓名与冲突 |
+| `placeholder-records.jsonl` | 已逐项复核的剧情占位说明，含原始角色标注与文本哈希 |
 | `name_candidates.jsonl` | 完整性模式的姓名来源键与原文，用于核验姓名删减 |
 | `discarded.jsonl` | 每条启发式删减的原文、来源键、原因、配对来源键与可用的相似度；完整性校对模式不删减 |
 | `content-audit.md` / `content-audit.json` | 全量相邻同文、资源覆盖缺口、角色缺口、格式一致性与版本前后对比 |
@@ -209,6 +220,11 @@ $env:IK_PASSWORD = "管理员密码"   # 不设则交互输入
 说明：
 
 - `has_voice`：该保留行是否关联配音；`coverage.voice_linked` 与 `voice_speaker` 使用最终保留行计数。
+- `speaker_status` / `speaker_gap_reason`：分开表示已解析、推断、未解决和无需角色的表现类型；缺口按原因汇总在清单的 `attribution`。
+- `speaker_slot`：气泡中的 A/B/C 等局部角色槽位，姓名尚未关联时不猜测身份。
+- `content_status=reviewed_placeholder` / `line_type=placeholder`：已核对的剧情编写说明，不作为角色对白；原始资源角色保存在 `source_attribution`，原文与 `line_id` 保留。
+- `perform.occurrences`：资源内每次文本引用的节点位置、类型、显示名键、配音、角色绑定和时间证据；同一文本可有多次引用。
+- `line_order_source` / `line_order_status`：完整且唯一的单资源单 section 气泡组使用 `perform_time` / `within_section`；其他仍为 `source_key` / `unknown`，跨场景 `chronology_status` 仍为 `unknown`。
 - `speaker_source`：`voice`（voiceKey 解析）/ `avatar`（Perform 节点头像名）/ `timeline`（ChatPlus 时间轴显示角色）/ `tips`（探索提示配置，主要是关卡内对话）/ `scene_alias`（场景名单推断）/ `scene_name`（单角色场景兜底）/ `none`。
 - `timeline`：仅验证通过的行含此字段，记录字幕键、语音键、时间轴名称、`sides`（M/F 路线）及可用的 `copy_of`。`text_difference=true` 表示主文本与时间轴字幕不一致，正文仍保留主文本。第 55 幕的 `_014`、`_069`、`_077` 存在断句或称呼差异，不自动以旧字幕替换新文本。
 - `quest_name`：GalGame 场景所属的官方任务名（来自剧情回放档案 + 任务配置），不属于任何任务时为 `null`。
@@ -257,6 +273,7 @@ zzz_story/
   perform.py    Perform CAB 字符串扫描
   odin.py       有边界校验的 Odin 二进制数据读取
   perform_graph.py  配置资源与明确性别分支证据
+  narrative.py   角色缺口分类与局部时间排序
   content_audit.py  全文质量与导出格式一致性审计
   speakers.py   voice 别名 → 中文名、缓存
   extract.py    主流程

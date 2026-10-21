@@ -26,6 +26,8 @@ def write_jsonl(records: Iterable[dict], path: Path) -> int:
 
 
 def _record_line(record: dict) -> str:
+    if record.get("content_status") == "reviewed_placeholder":
+        return f"（剧情占位说明）{record.get('text', '')}"
     if record.get("line_type") == "option":
         return f"> 选项：{record.get('text', '')}"
     speaker = record.get("speaker")
@@ -33,6 +35,8 @@ def _record_line(record: dict) -> str:
     if speaker:
         return f"【{speaker}】{text}"
     if record.get("line_type") == "unknown":
+        if record.get("speaker_slot"):
+            return f"（角色槽位 {record['speaker_slot']}，姓名未关联）{text}"
         return f"（未标注）{text}"
     # Akasha-style presentation: narration is plain text, not a fake speaker.
     return text
@@ -62,8 +66,20 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
         chunks.append("")
 
     scene_cast_map: dict[tuple, list[str]] = {}
+    placeholder_scenes = {}
+    unlinked_name_scenes = {}
     for record in records:
         key = (record.get("chapter"), record.get("family"), record.get("scene"))
+        placeholder_scenes[key] = placeholder_scenes.get(key, True) and record.get("content_status") == "reviewed_placeholder"
+        # Scene Name keys are a name table, not per-line actor references.
+        # Missing references do not establish whether the text is played.
+        unlinked_name_scenes[key] = unlinked_name_scenes.get(key, True) and (
+            record.get("line_type") == "unknown"
+            and not record.get("speaker")
+            and record.get("speaker_gap_reason") == "no_structured_reference"
+            and not record.get("perform")
+            and not record.get("timeline")
+        )
         cast = scene_cast_map.setdefault(key, [])
         for spk in (record.get("scene_speakers") or []):
             if spk and spk not in cast and spk != "未标注":
@@ -72,7 +88,7 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
         if spk and spk not in cast and spk != "未标注":
             cast.append(spk)
 
-    scene_acts: dict[tuple[str, str], int] = {}
+    scene_acts: dict[tuple[str, str, str], int] = {}
     current_chapter_for_acts = None
     act_counter = 0
     for record in records:
@@ -81,9 +97,10 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
         if ch != current_chapter_for_acts:
             current_chapter_for_acts = ch
             act_counter = 0
-        if (ch, sc) not in scene_acts:
+        scene_identity = (ch, record.get("family") or "", sc)
+        if scene_identity not in scene_acts:
             act_counter += 1
-            scene_acts[(ch, sc)] = act_counter
+            scene_acts[scene_identity] = act_counter
 
     current_chapter = None
     current_scene = None
@@ -128,13 +145,21 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
             sc = record.get("scene") or ""
             key = (ch, record.get("family"), sc)
             cast = scene_cast_map.get(key, [])
-            act_num = record.get("scene_act") or scene_acts.get((ch, sc), 1)
+            act_num = record.get("scene_act") or scene_acts.get((ch, record.get("family") or "", sc), 1)
             title = record.get("scene_title")
             title_str = f"：{title}" if title else ""
             cast_str = f"（出场：{'、'.join(cast)}）" if cast else ""
+            unlinked_names = bool(cast) and unlinked_name_scenes.get(key)
+            if placeholder_scenes.get(key):
+                cast_str = "（剧情占位说明，播放未核实）"
+            elif unlinked_names:
+                cast_str = f"（姓名表：{'、'.join(cast)}）"
             chunks.append("")
             chunks.append(f"## 第 {act_num} 幕{title_str}{cast_str}")
             chunks.append("")
+            if unlinked_names:
+                chunks.append("> 说话人未关联；分支、播放及先后未核实。当前排列不代表连续播放，重复及不同版本原文保留。")
+                chunks.append("")
 
         if record.get("line_type") == "option":
             opt_buffer.append(record)

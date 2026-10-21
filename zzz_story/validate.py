@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .chapters import chapter_info
+from .narrative import reviewed_outline
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,13 @@ def validate_records(records: list[dict], supplements: list[dict] | None = None)
         return issues
 
     all_rows = records + (supplements or [])
+    unclassified = [row for row in records if reviewed_outline(row) and row.get("content_status") != "reviewed_placeholder"]
+    if unclassified:
+        issues.append(Issue("warning", "unclassified-placeholder", f"{len(unclassified)} 条已核对的剧情占位说明仍作为正式正文显示（例如 {unclassified[0].get('source_key')}）"))
+    bad_placeholders = [row for row in records if row.get("content_status") == "reviewed_placeholder"
+                        and (row.get("speaker") or row.get("scene_speakers") or row.get("line_type") != "placeholder")]
+    if bad_placeholders:
+        issues.append(Issue("error", "placeholder-attribution", "剧情占位说明仍含对白署名或出场名单"))
     missing = sum(not isinstance(row.get("line_id"), str) or not row["line_id"].strip() for row in all_rows)
     if missing:
         issues.append(Issue("error", "missing-line-id", f"{missing} 条记录缺少有效 line_id"))

@@ -19,16 +19,21 @@ from .perform_graph import configured_routes, graph_links, link_unused_copies
 from .textmap import load_language_map
 from .timeline import VOICE_RE, link_main_copies, scan_timeline_clips
 
-CACHE_VERSION = 8
+CACHE_VERSION = 9
 
 _TIPS_VOICE_RE = re.compile(r"^[A-Za-z]+_Chapter\w+_([A-Za-z]+)_\d+_\d+$")
-_TIPS_NAME_IGNORE = {"选项", "玩家选项", "旁白", "咨询", "购买", "找零"}
+_TIPS_NAME_IGNORE = {"选项", "玩家选项", "旁白"}
 
 _ALIAS_IN_BANKS = re.compile(r"(?:^|\|)BK_([A-Za-z0-9]+)")
 _ALIAS_IN_PATH = re.compile(r"(?:^|/)VO_([A-Za-z0-9]+)(?:/|$)")
 _GALGAME_SOURCE = re.compile(
     r"^(?:VO_[A-Za-z0-9_./-]+/)?(?:Galgame|GalGame)_([^_/]+)_([^_/]+)_(\d+)(?:_\d+)*$",
     re.IGNORECASE,
+)
+_TIMELINE_CSR_SOURCE = re.compile(r"^Timeline_Csr_[A-Za-z0-9_]+_([A-Za-z][A-Za-z0-9]*)_\d+$")
+_OTHER_VOICE_SOURCE = re.compile(
+    r"^(?:Chat|ChatAudio|ChatPlus|Bubble|BubbleStory|OngoingLevel|OngoingMainCity|OngoingAntique|Ongoing)"
+    r"(?:_Bubmale)?_Chapter[^_]+_([^_]+)_\d+(?:_\d+)*$"
 )
 _CHAPTER_NORMALIZE = re.compile(r"chapter0*(\d+)", re.IGNORECASE)
 _NAME_CLEAN = re.compile(r"[\s\-_·.&/（）()\[\]【】「」:：,，]+")
@@ -236,6 +241,12 @@ def alias_from_source(source: str) -> str | None:
         return found[-1]
 
     filename = source.rsplit("/", 1)[-1]
+    timeline = _TIMELINE_CSR_SOURCE.fullmatch(filename)
+    if timeline:
+        return timeline.group(1)
+    other = _OTHER_VOICE_SOURCE.fullmatch(filename)
+    if other and not other.group(1).isdigit():
+        return other.group(1)
     match = _GALGAME_SOURCE.match(filename)
     if match:
         alias = match.group(2)
@@ -244,6 +255,35 @@ def alias_from_source(source: str) -> str | None:
         if alias and not alias.isdigit():
             return alias
     return None
+
+
+def structured_speaker(link: dict, text_map, aliases: dict[str, str], existing: SpeakerInfo | None = None) -> SpeakerInfo:
+    """Resolve same-node fields; an empty field cannot inherit a nearby name."""
+    avatars = link["avatars"]
+    avatar = avatars[0] if len(avatars) == 1 else None
+    displays = [text_map.get(value) or resolve_alias(value, aliases) for value in avatars]
+    display = displays[0] if displays and all(displays) and len(set(displays)) == 1 else None
+    resolved = [(resolve_alias(alias, aliases), alias) for voice in link["voice_keys"]
+                if (alias := alias_from_source(voice))]
+    names = {name for name, _ in resolved if name}
+    if not avatars and len(names) == 1:
+        display = next(iter(names))
+    voice_aliases = {alias for name, alias in resolved if name == display}
+    alias = avatar or (next(iter(voice_aliases)) if len(voice_aliases) == 1 else None)
+    if not alias:
+        unresolved = {alias for _, alias in resolved}
+        alias = next(iter(unresolved)) if len(unresolved) == 1 else None
+    # Typed occurrences supersede the legacy scanner, including explicit
+    # unnamed narration, conflicting names and unresolved local actor slots.
+    exact = bool(link.get("occurrences"))
+    return SpeakerInfo(
+        display or (existing.speaker if existing and not exact else None),
+        alias or (existing.alias if existing and not exact else None),
+        0.98 if display else (existing.confidence if existing and not exact else 0.0),
+        "perform" if display or exact else (existing.source if existing else "none"),
+        bool(link["voice_keys"]) or bool(existing and existing.has_voice and not exact),
+        perform=link,
+    )
 
 
 def canonical_text_id(value: str) -> str:
@@ -457,7 +497,11 @@ def _perform_speakers(
         print("warning: no Perform blocks found; continuing without per-line speakers")
         return {}, set()
 
-    routes = configured_routes(perform_payload)
+    # Keep all GalGame assets for agent lore; other families are structured
+    # only for main-story assets. Event/partner Chat is outside this parser's
+    # scope and includes layouts not used by the main story.
+    routes = {path: sides for path, sides in configured_routes(perform_payload).items()
+              if "/Data/GalGame/" in path or Path(path).stem.startswith(("Main_", "MainChat_"))}
     source_to_text, avatar_to_text, option_keys, scan_stats = scan_perform_blocks(block_paths, set(routes))
     stats.links = scan_stats.links
     stats.sources = scan_stats.sources
@@ -525,26 +569,9 @@ def _perform_speakers(
     links = graph_links(scan_stats.graphs, routes)
     link_unused_copies(links, scan_stats.graphs, routes, text_map)
     for key, link in links.items():
-        existing = speakers.get(key)
-        avatars = link["avatars"]
-        display = text_map.get(avatars[0]) if len(avatars) == 1 else None
-        resolved_voices = [(resolve_alias(alias_from_source(voice), alias_map), alias_from_source(voice))
-                           for voice in link["voice_keys"] if alias_from_source(voice)]
-        voice_names = {name for name, _ in resolved_voices if name}
-        if not display and len(voice_names) == 1:
-            display = next(iter(voice_names))
-        voice_aliases = {alias for name, alias in resolved_voices if name == display}
-        alias = avatars[0] if len(avatars) == 1 else (next(iter(voice_aliases)) if len(voice_aliases) == 1 else None)
-        # Exact node fields supersede nearby-string matches, including hidden
-        # identities. Empty/ambiguous avatars do not justify guessing a name.
-        speakers[key] = SpeakerInfo(
-            display or (existing.speaker if existing else None),
-            alias or (existing.alias if existing else None),
-            0.98 if display else (existing.confidence if existing else 0.0),
-            "perform" if display else (existing.source if existing else "none"),
-            bool(link["voice_keys"]) or bool(existing and existing.has_voice),
-            perform=link,
-        )
+        speakers[key] = structured_speaker(link, text_map, alias_map, speakers.get(key))
+        if link.get("is_option"):
+            option_keys.add(key)
     stats.perform_graphs = len(scan_stats.graphs)
     stats.perform_graph_errors = len(scan_stats.graph_errors)
     stats.perform_gender_keys = sum(link["explicit_gender"] for link in links.values())
