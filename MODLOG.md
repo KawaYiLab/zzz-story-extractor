@@ -266,3 +266,21 @@ record text/order/IDs are unchanged. 169 tests pass, including duplicate
 and address-version preservation and isolation of scene evidence. Both
 full audits report zero export errors or text anomalies; all 57,928
 candidate texts, stable IDs and destinations reconcile.
+
+## 2026-10-22 Follow-up: MCP query usability
+
+Updated the sibling ikserver-rs story engine after reproducing strict-AND
+and release-alias gaps in failing regression tests. Multi-term searches
+try same-document complete matches first, then explicitly labeled partial
+matches by default; allowPartial=false retains strict semantics. Path,
+scope, speaker, docId and release selectors remain hard constraints.
+Reviewed aliases 3.2 -> Chapter230 and 3.3 -> Chapter240 are supported by
+catalog, read and search. They mean newly added main story, not the
+snapshot version of every chapter. Unknown mappings are never inferred.
+
+31 story end-to-end tests and all-targets compilation/format checks pass.
+Local query verification against the current out/zzz_story_3.3.0_chs is
+saved in out/search_usability_3.3.0.json. The 3.3 core query returns four
+documents/five lines; the three-concept query remains strict-zero but
+returns labeled partial candidates by default. Extraction data unchanged;
+no upload, deployment, commit or push performed.

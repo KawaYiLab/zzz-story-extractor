@@ -182,6 +182,12 @@ $env:IK_PASSWORD = "管理员密码"   # 不设则交互输入
 - 旧版补充文本含浮点 `chapter_order` 时，上传会自动将整包章节顺序等比例转成整数，保留间章顺序，无需重新提取。
 - `--server`、`--account`、`--token` 也可以用环境变量 `IK_SERVER`、`IK_ACCOUNT`、`IK_TOKEN`。
 
+本地 ikserver-rs 查询层已加入检索回退与版本别名：多词先求同篇完整匹配，无完整匹配时
+默认列出部分匹配及缺失词，`allowPartial=false` 保持严格查询。
+`ik_search(keyword="3.3版本 核心")`、`ik_catalog(path="3.3")`、`ik_read(docId="v3.3")`
+均定位 `Chapter240`；3.2 对应 `Chapter230`。别名指该版新增主线，语料快照仍包含历史章节。
+详见后端 `docs/story-search.md`；此查询层改动需部署后端才能在线生效。
+
 ## 数据来源
 
 - 文本与配置：Gitea 镜像 `https://git.mero.moe/dimbreath/ZenlessData`（3.3.0，优先），备用 GitHub 镜像 `https://github.com/malu-no996/ZenlessData`。下载固定同一提交；备用镜像必须含该提交才可用，不回退到较旧版本。除 TextMap 外还使用 PerformTemplateTb、ArchivePerformTemplateTb（剧情回放顺序）、QuestConfigTemplateTb（任务名）、OngoingTipsConfigTemplateTb（关卡内对话说话人）等配置表。
