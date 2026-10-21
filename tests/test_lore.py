@@ -3,6 +3,36 @@ from pathlib import Path
 
 from zzz_story.lore import extract_lore
 from zzz_story.textmap import TextMap
+from zzz_story.speakers import SpeakerInfo, SpeakerIndex, SpeakerStats
+
+
+def test_lore_dialogue_names_event_boundaries_routes_and_source_audit(tmp_path):
+    prefix = "PartnerTalk_GalGame_PartnerAnbi_1001"
+    male, female = prefix + "_001", prefix + "_002"
+    values = {"Avatar_Anby": "安比", male: "同一句长台词", female: "同一句长台词",
+              prefix + "_Name_001": "角色姓名不是台词",
+              "Chat_PartnerTalk_Anbi_2_4_7": "重复但来自事件4",
+              "Chat_PartnerTalk_Anbi_2_5_7": "重复但来自事件5",
+              "PartnerTalk_Chat_PartnerAnbi_1205290704_Chat010_001": "嵌套场景后缀"}
+    base = {"paired_key": female, "sides": ["M"], "explicit_gender": True}
+    infos = {male: SpeakerInfo("NPC", None, 1, "perform", perform=base),
+             female: SpeakerInfo("NPC", None, 1, "perform", perform={**base, "paired_key": male, "sides": ["F"]})}
+    index = SpeakerIndex(infos, SpeakerStats())
+    avatar = {"IAEFFFFLKNB": [{"PFOAJKNPCHL": 1011, "HAKHHHCAENA": "Avatar_Anby",
+                              "FEKFJBFGANO": "anbi", "OOOHMBMDLBI": 1}]}
+    for accuracy in (False, True):
+        output = tmp_path / str(accuracy)
+        stats = extract_lore(TextMap(values, "CHS"), avatar, output, speaker_index=index, accuracy_first=accuracy)
+        doc = (output / "lore/agents/01_狡兔屋.md").read_text(encoding="utf-8")
+        rows = [json.loads(line) for line in (output / "lore/agents/dialogue-audit.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert "角色姓名不是台词" not in doc
+        assert "街区日常 2_4" in doc and "街区日常 2_5" in doc
+        assert "街区日常 1205290704_Chat010" in doc
+        assert male in doc and (female in doc) == accuracy
+        assert {row["source_key"] for row in rows} == set(values) - {"Avatar_Anby", prefix + "_Name_001"}
+        removed = [row for row in rows if not row["retained"]]
+        assert len(removed) == stats["lore_dialogue_removed"] == (0 if accuracy else 1)
+        assert all(row["raw_text"] == values[row["source_key"]] for row in rows)
 
 
 def test_extract_lore(tmp_path):
@@ -150,14 +180,14 @@ def test_extract_lore(tmp_path):
 
     disc_doc = (out_dir / "lore" / "equipment" / "01_驱动盘唱片物语.md").read_text(encoding="utf-8")
     assert "《啄木鸟电音》" in disc_doc
-    assert "全 30 套驱动盘战术流派与唱片速查总览" in disc_doc
+    assert "收录 1 套驱动盘战术流派与唱片速查总览" in disc_doc
     assert "六重奏分轨曲目物语" in disc_doc
     assert "第 1 部分曲目" in disc_doc
     assert "记录着《啄木鸟电音》第一部分曲目的驱动盘..." in disc_doc
 
     engine_doc = (out_dir / "lore" / "equipment" / "02_音擎档案与题记.md").read_text(encoding="utf-8")
     assert "《德玛拉电池Ⅱ型》" in engine_doc
-    assert "全 100 款音擎品质与战术回路速查总览" in engine_doc
+    assert "收录 1 款音擎品质与战术回路速查总览" in engine_doc
     assert "以电为名的剑..." in engine_doc
     assert "电能爆发" in engine_doc
 
@@ -174,6 +204,11 @@ def test_extract_lore(tmp_path):
 
     col_doc = (out_dir / "lore" / "equipment" / "04_收藏展架与风味展品.md").read_text(encoding="utf-8")
     assert "展架藏品风味速查总览表" in col_doc
+    assert "收录 2 件展架藏品" in col_doc
+    index_doc = (out_dir / "lore" / "README.md").read_text(encoding="utf-8")
+    assert "收录 1 位代理人" in index_doc
+    assert "收录 1 款音擎" in index_doc
+    assert "收录 2 件展架藏品" in index_doc
     assert "格莱特的恋人" in col_doc
     assert "模型：德玛拉电池Ⅱ型" in col_doc
     assert "专属题记 / 纪念名言" in col_doc

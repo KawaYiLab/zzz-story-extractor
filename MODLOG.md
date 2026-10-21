@@ -1,0 +1,203 @@
+# 3.3.0 extraction compatibility
+
+Verified on 2026-10-21 with local `CNPRODWin3.3.0` resources. This session
+reads installed files only. Existing 3.2.0 caches, outputs and working changes
+were preserved.
+
+## Inputs
+
+- ZenlessData snapshot: [fd6cb326c07c75f39b0b05845d204302c451ec34](https://git.mero.moe/dimbreath/ZenlessData/commit/fd6cb326c07c75f39b0b05845d204302c451ec34).
+- All 13 required files are bound to that commit and verified by SHA-256 in
+  `data/cache/3.3.0/source_provenance.json`. The merged CHS map has 451,194 keys.
+- The GitHub fallback mirror was still at 3.2.0 during inspection. It cannot
+  substitute an older snapshot for files from the fixed Gitea commit.
+- Perform, AvatarBase, archive and quest fields used by the extractor retain
+  their existing names. `MainStoryChapterName_1021` supplies the Chapter240 title.
+- Community reference inspected: [zenless-voice/galgame-perform.ts](https://github.com/simon300000/zenless-voice/blob/master/galgame-perform.ts).
+  Its public catalog reader still expects gzip; the new layout below was
+  verified against the local game files.
+
+## Resource Index
+
+The index is the untagged `Blocks/<id>.blk` entry in `res_version` or
+`res_version_persist`, currently `2837526243.blk`. Resolve the persistent
+version first, then the streaming install. Perform resources use the same
+priority. There is no standalone gzip block in this 3.3 install.
+
+The new index uses the existing mhy1 decoder. UnityPy locates custom object
+class ID `6776977` in the decoded Unity file, so the parser does not hardcode
+its file offset. The object's little-endian prefix is `03 00 00 00 52 65 73 00`.
+
+| Table | Encoding |
+| --- | --- |
+| Assets | u32 count, then 12-byte entries: u32 bundle index + u64 path hash |
+| Bundles | u32 count, then 44-byte entries; first u32 is the block index |
+| Blocks | u32 count, then 9-byte entries; first u32 is the block filename ID |
+
+Trailing dependency data is not needed to locate Perform blocks. Every table
+end is checked before access. Legacy gzip keeps its 52-byte header, 28-byte
+bundle stride and block filename ID at offset 1 within each 9-byte entry.
+
+The persistent index contains 570,614 assets, 784,413 bundles and 10,532 blocks.
+The base index also parses: 565,107 assets, 778,871 bundles and 10,470 blocks.
+Of 31,098 Perform paths, 30,765 match the persistent index and use 20 blocks.
+The base index matches 30,762 paths and uses 19 blocks. The scanner decoded
+66,907 voice links, 181,898 avatar links and 41,903 options from the selected
+20 blocks. Speaker fingerprints now cover both block directories, nested
+resource files and both version manifests.
+
+## Verification
+
+- Tool version is 0.3.0; default cache and output version is 3.3.0.
+- 124 Python tests pass, including both index layouts, truncated new tables,
+  Unity object extraction, persistent resource priority and cache invalidation.
+- Editable installation, dependency checks and `doctor` pass.
+- Default extraction: 48,977 main lines, 4,605 supplement lines, 65 agent files;
+  JSONL, TXT, CSV and lore are in `out/zzz_story_3.3.0_chs`.
+- Accuracy extraction: 53,141 main lines and 4,787 supplement lines, in
+  `out/zzz_story_3.3.0_chs_audit`.
+- Both outputs pass `verify` with zero errors and zero warnings.
+- `python -O scripts/check_corpus_integrity.py` passes: 57,928 line candidates,
+  53,582 retained, 4,346 discarded lines and 5 discarded name entries. Raw
+  text, candidate destinations and stable IDs were checked.
+- Compared with `out/reviewed_final_3.2.0`, there are 2,248 new main lines,
+  zero removed lines and 5 changed lines. All additions are Chapter240;
+  changes in Chapter230 comprise one text edit and four speaker/type updates.
+
+## Remaining Data Limits
+
+- Default voiced coverage is 21,239 / 21,245, about 99.9718%. Five unresolved
+  rows are historical; the sixth is
+  `Main_GalGame_Chapter240_124000040_015` with alias `SunbringerBangboo`.
+  No display name was guessed for it. Accuracy-mode coverage is 24,572 / 24,590.
+- 333 configured Perform paths do not match the persistent index, including
+  10 main paths. Chapter240 matches 130 / 133 paths; unmatched scenes are
+  `124000036`, `124000037` and `124000038`. The first two have TextMap entries
+  that remain candidates; the third has no matching TextMap scene.
+- Six empty TextMap values in Chapter02 remain reported in `missing_examples`.
+- No `CS_34_*` exists in this snapshot. Comic remains unlinked. Chapter240 has
+  39 GalGame scenes, with no validated task association or playback chronology.
+- Full extraction verifies the available inputs and retained candidates, not
+  completeness against the game's runtime or an exact single-protagonist route.
+- No game files or decoded containers were added to version control. No upload,
+  deployment, commit or push was performed.
+
+## ChatPlus Duplicate-Line Repair
+
+The reported scene is `Main_GalGame_Chapter210_1721000030`, act 55,
+"烈火与缰绳". The original default output had 78 lines; the same issue was
+already present in the reviewed 3.2 output. Ordinary Perform scanning linked
+only lines 001-010, leaving the rest unattributed and both routes visible.
+
+Verified local resource chain:
+
+- Perform row `1721000030` selects `TL_C30_ChatPlus_03B` in `BCKKFAEFDPP`
+  (male route) and `TL_C30_ChatPlus_03G` in `LGJCAHIEBBK` (female route).
+- Graphs in patched `Blocks/Data/1288178548.blk` invoke
+  `PlayChatPlusTimeline` with the matching `TimelineDataKey`.
+- `Blocks/3564160063.blk` contains `ChatPlusTimeline_3.0` configuration,
+  referencing `CutScene_Runtime/ChatPlusTimeline/3.0/<name>/<name>.prefab`.
+- Both prefabs resolve through the resource index to `3897008602.blk`.
+  CABs 293 and 303 contain `TL_C30_ChatPlus_03B_Timeline` and
+  `TL_C30_ChatPlus_03G_Timeline`, respectively.
+- `ChatPlusDialogClip` is a MonoBehaviour (class 114). Its script PPtr is at
+  offset 16, its aligned name string at offset 28, followed by three aligned
+  UTF-8 Unity strings: avatar, text key, voice key. Cloned object names must
+  also be read; otherwise lines 51, 63 and 85 are missed. UnityPy verifies
+  the MonoScript class before parsing this layout.
+
+`timeline.py` discovers the config blocks from manifest tag 2 and resolves
+configured prefab paths, without pinning block IDs. Both declared routes must
+be present. Main-text namespaces are linked only with matching scene/line
+numbers, at least 10 comparable clips and at least 90% exact cleaned-text
+alignment. Unused adjacent identical main copies are marked only when the
+preceding timeline key is shared by both routes. This is not global text
+deduplication. Public source text is never rewritten.
+
+The scan resolved 68 prefab paths in 8 blocks and read 831 unique clips.
+148 main-text candidates passed correspondence checks, in scenes 1721000005,
+1721000006 and 1721000030. Other timeline/main namespaces remain unlinked.
+Timeline avatar names take precedence over voice-bank aliases so the hidden
+speaker is displayed as "？？？", not their internal voice identity.
+
+Final verification:
+
+- 132 tests pass, including cloned clips, script identity, namespace mismatch,
+  missing route resources, shared NPC lines, distinct branch wording, repeated
+  unattributed pauses, CSV metadata and complete default/audit extraction.
+- Corrected output: `out/zzz_story_3.3.0_chs_corrected`, 48,940 main lines,
+  35,817 attributed lines, 4,605 supplement lines. Voiced coverage is
+  21,275 / 21,281; the same six unresolved lines remain.
+- Audit output: `out/zzz_story_3.3.0_chs_corrected_audit`, 53,141 main lines,
+  4,787 supplement lines. Voiced coverage is 24,645 / 24,663.
+- Both pass verify with zero errors/warnings. Corpus integrity passes:
+  57,928 candidates, 53,545 retained, 4,383 discarded lines and 5 discarded
+  name entries. Every original candidate and stable retained ID is accounted for.
+- Act 55 now has 42 lines, all attributed, with zero adjacent identical
+  texts. Its 41 discarded original candidates comprise 29 female-route lines
+  and 12 unused main-text copies. The common Billy line remains.
+- Against the initial 3.3 default output, 38 lines were removed and one line
+  restored, all in the three scenes above. The restored 1721000005_023 is
+  Belle's independent NPC dialogue on the male route. No retained text changed.
+- Act 55 main-text lines 014, 069 and 077 differ from timeline subtitles.
+  014/077 contain merged segments; 069/077 have a sibling-address discrepancy.
+  They retain their main text and carry `timeline.text_difference=true`.
+  Full runtime chronology and resolution of these text discrepancies remain
+  outside the verified scope.
+- Initial 3.3 outputs and the partial CSV-failure attempt in
+  `out/zzz_story_3.3.0_chs_fixed` are preserved. Use the corrected directory.
+
+## Full Content Review (2026-10-21)
+
+Read the original Odin binary entry specification from the public
+TeamSirenix/odin-serializer repository (BinaryEntryType.cs and
+BinaryDataReader.cs), then verified it against local MonoBehaviour objects.
+The object name is an aligned Unity UTF-8 string at offset 28, followed by
+serialization format 0, a bounded byte-array size, and the Odin stream.
+Named strings support 8-bit or UTF-16LE character storage. Type references,
+reference IDs, arrays and node boundaries are decoded without instantiating
+serialized classes. AssetBundle container hashes and PPtrs resolve the exact
+PerformTemplate-selected asset, rather than selecting nearby strings.
+
+Verified `GalConditionNode.conditionKey=Gender`, values 1/2, uses
+`bindSectionIndex` / `bindSubSectionIndex` for M/F routes. Separate arms use
+`GalJumpChapterNode.chapterIndex` / `subIndex` to rejoin the common graph.
+Only linear known-node arms with a verified reunion and mutual text peers
+are filtered. Unknown conditions, non-rejoining arms and conflicting/shared
+references remain candidates. `GalPlayPictureStoryNode` is also a dialogue
+node. `conditionTransitionList` is not guessed as a gender condition.
+
+Scanned 20 blocks, read 2,213 configured graphs, zero parse failures.
+17,701 resource text keys have explicit gender peer evidence, including
+non-main-story content. Nine main duplicate-only omissions meet the narrow
+unused-copy checks, including scene 121000258 lines 017/018/019.
+Exact avatar fields preserve hidden names; multi-part voice numeric suffixes
+now resolve aliases. Explicit M routes protect independent Belle NPC lines.
+
+The same evidence is used for agent lore interactions. Name metadata is
+excluded, nested scene suffixes and encounter IDs are preserved, and
+`lore/agents/dialogue-audit.jsonl` retains every extracted dialogue source and
+original value. Counts in equipment/index headings are generated from data.
+
+Final outputs: `out/zzz_story_3.3.0_chs_complete` and
+`out/zzz_story_3.3.0_chs_complete_audit`. Main lines 47,625 / 53,141;
+supplement lines 4,605 / 4,787; default voice attribution 19,976 / 19,986.
+Compared with this round's baseline, 1,722 main candidates move to audit,
+407 candidates return, 3,311 speaker labels change, zero retained texts change.
+Agent interaction candidates 40,033 in both modes; default removes 1,077
+explicit F-route entries with preserved raw text and retained peers.
+
+149 tests pass. Both outputs pass verify. All 57,928 main/supplement
+candidates and stable IDs reconcile (52,230 retained, 5,698 removed lines,
+5 removed names). Lore candidates also reconcile without raw-text changes.
+TXT, CSV and chapter exports match JSONL re-rendering. Full content audit
+finds no supported-markup/empty/replacement-character anomalies.
+
+Remaining signals are deliberately retained: 317 adjacent equal main pairs,
+159 at least 12 characters; 188 partially referenced scenes; 90 equal lore
+interaction pairs; two duplicated achievement rows with distinct source IDs;
+10 unresolved voiced speakers and six empty TextMap values. Stub/missing
+resources, external timelines and runtime chronology remain limitations.
+See `docs/full-content-review-2026-10-21.md` and output content-audit files.
+Several intermediate output folders are preserved, including failed lore
+generation attempts; use only the final complete/complete_audit pair.

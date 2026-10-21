@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .mhy1 import MhyError, extract_mhy_files
@@ -140,11 +140,17 @@ class ScanStats:
     avatar_links: int = 0
     avatar_values: int = 0
     option_keys: int = 0
+    graphs: dict = field(default_factory=dict)
+    graph_errors: dict = field(default_factory=dict)
 
 
 def scan_perform_blocks(
     block_paths: list[Path],
+    graph_paths: set[str] | None = None,
 ) -> tuple[dict[str, set[str]], dict[str, str], set[str], ScanStats]:
+    from .perform_graph import asset_hash, graphs_from_cab
+    wanted = {asset_hash(path): path for path in graph_paths or set()}
+    graph_marker = "storySections".encode("utf-16le")
     source_to_text: dict[str, set[str]] = {}
     avatar_to_text: dict[str, str] = {}
     option_keys: set[str] = set()
@@ -162,6 +168,13 @@ def scan_perform_blocks(
         stats.mhy_files += 1
         for cab in files:
             stats.cab_files += 1
+            if wanted and graph_marker in cab:
+                try:
+                    stats.graphs.update(graphs_from_cab(cab, wanted))
+                except (ValueError, KeyError, UnicodeDecodeError) as exc:
+                    # Unknown layouts remain available to the legacy scanner;
+                    # never turn a parse failure into evidence of unused text.
+                    stats.graph_errors[f"{path.name}:cab{stats.cab_files}"] = str(exc)
             links, avatars, options = scan_cab(cab)
             for source, text_id in links:
                 stats.links += 1

@@ -48,6 +48,8 @@ def _chapters_in_order(records: list[dict]) -> list[tuple[str, str]]:
 
 def write_story_txt(records: list[dict], path: Path, include_index: bool = True) -> None:
     chunks: list[str] = []
+    if any(record.get("chronology_status") == "unknown" for record in records):
+        chunks.extend(["> 以下按目录排列；场景编号和幕次不代表剧情时间先后。", ""])
     if include_index:
         chunks.append("# 绝区零主线剧情")
         chunks.append("")
@@ -208,6 +210,12 @@ def write_supplement_txt(records: list[dict], path: Path) -> None:
                 chunks.append(f"#### 过场 {scene}")
                 chunks.append("")
 
+        if family == "Comic":
+            source = record.get("source_key") or record.get("line_id") or "未知来源"
+            chunks.extend(["", f"### 独立片段 {source}（上下文未关联；相邻片段不代表连续剧情）", ""])
+        elif family != "CS" and record.get("scene") != current_scene:
+            current_scene = record.get("scene")
+            chunks.extend(["", f"### 片段 {current_scene}", ""])
         chunks.append(record.get("text", ""))
 
     raw_text = "\n".join(chunks).strip() + "\n"

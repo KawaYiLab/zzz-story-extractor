@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .catalog import Catalog, find_catalog_block, map_story_assets, story_asset_paths
-from .fetch import read_json
+from .catalog import (
+    Catalog, find_catalog_block, find_resource_block, map_story_assets,
+    resource_block_dirs, story_asset_paths,
+)
+from .fetch import read_json, read_game_version, sha256_file
 from .perform import scan_perform_blocks
+from .perform_graph import configured_routes, graph_links, link_unused_copies
 from .textmap import load_language_map
+from .timeline import VOICE_RE, link_main_copies, scan_timeline_clips
 
-CACHE_VERSION = 5
+CACHE_VERSION = 8
 
 _TIPS_VOICE_RE = re.compile(r"^[A-Za-z]+_Chapter\w+_([A-Za-z]+)_\d+_\d+$")
 _TIPS_NAME_IGNORE = {"选项", "玩家选项", "旁白", "咨询", "购买", "找零"}
@@ -21,7 +27,7 @@ _TIPS_NAME_IGNORE = {"选项", "玩家选项", "旁白", "咨询", "购买", "�
 _ALIAS_IN_BANKS = re.compile(r"(?:^|\|)BK_([A-Za-z0-9]+)")
 _ALIAS_IN_PATH = re.compile(r"(?:^|/)VO_([A-Za-z0-9]+)(?:/|$)")
 _GALGAME_SOURCE = re.compile(
-    r"^(?:VO_[A-Za-z0-9_./-]+/)?(?:Galgame|GalGame)_([^_/]+)_([^_/]+)_(\d+)(?:_\d+)?$",
+    r"^(?:VO_[A-Za-z0-9_./-]+/)?(?:Galgame|GalGame)_([^_/]+)_([^_/]+)_(\d+)(?:_\d+)*$",
     re.IGNORECASE,
 )
 _CHAPTER_NORMALIZE = re.compile(r"chapter0*(\d+)", re.IGNORECASE)
@@ -198,6 +204,8 @@ class SpeakerInfo:
     confidence: float
     source: str  # voice | scene_name | none
     has_voice: bool = False
+    timeline: dict | None = None
+    perform: dict | None = None
 
 
 @dataclass
@@ -213,6 +221,12 @@ class SpeakerStats:
     avatar_values: int = 0
     avatar_speakers: int = 0
     tips_speakers: int = 0
+    timeline_clips: int = 0
+    timeline_mapped: int = 0
+    perform_graphs: int = 0
+    perform_graph_errors: int = 0
+    perform_gender_keys: int = 0
+    perform_copy_keys: int = 0
 
 
 def alias_from_source(source: str) -> str | None:
@@ -359,6 +373,33 @@ def _recount_speaker_gaps(speakers: dict[str, SpeakerInfo], stats: SpeakerStats)
     stats.ambiguous = sum(1 for info in voiced if not info.alias)
 
 
+def _speaker_fingerprint(text_map, alias_map: dict[str, str], perform_path: Path, game_dir: Path) -> str:
+    """Bind cache to tables, resolver code and local resource inventory.
+
+    Resource updates are detected by version and block path/size/mtime. For
+    in-place binary edits preserving all metadata, use --refresh.
+    """
+    root = game_dir / "ZenlessZoneZero_Data"
+    inventory = []
+    paths = [path for blocks in resource_block_dirs(game_dir) for path in blocks.rglob("*.blk")]
+    paths.extend(root / rel for rel in ("Persistent/res_version_persist", "StreamingAssets/res_version")
+                 if (root / rel).is_file())
+    for path in sorted(paths):
+        stat = path.stat()
+        inventory.append((path.relative_to(root).as_posix(), stat.st_size, stat.st_mtime_ns))
+    inputs = {
+        "perform": sha256_file(perform_path),
+        "textmap": sorted(text_map.items()),
+        "aliases": sorted(alias_map.items()),
+        "resolver": {name: sha256_file(Path(__file__).with_name(name))
+                     for name in ("speakers.py", "perform.py", "catalog.py", "mhy1.py", "timeline.py", "odin.py", "perform_graph.py")},
+        "game": str(game_dir.resolve()),
+        "game_version": read_game_version(game_dir),
+        "blocks": inventory,
+    }
+    return hashlib.sha256(json.dumps(inputs, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
+
 def _perform_speakers(
     text_map,
     alias_map: dict[str, str],
@@ -368,11 +409,14 @@ def _perform_speakers(
     refresh: bool,
     stats: SpeakerStats,
 ) -> tuple[dict[str, SpeakerInfo], set[str]]:
+    fingerprint = _speaker_fingerprint(text_map, alias_map, perform_path, game_dir)
     if cache_path.exists() and not refresh:
         try:
             payload = json.loads(cache_path.read_text(encoding="utf-8"))
             if payload.get("version") != CACHE_VERSION:
                 raise ValueError("speaker cache version changed")
+            if payload.get("fingerprint") != fingerprint:
+                raise ValueError("speaker inputs/resources changed or fingerprint missing")
             speakers = {
                 text_id: SpeakerInfo(**info)
                 for text_id, info in payload.get("speakers", {}).items()
@@ -399,13 +443,12 @@ def _perform_speakers(
     asset_paths = story_asset_paths(perform_payload)
     by_block, matched = map_story_assets(catalog, asset_paths)
     block_paths = []
-    blocks_dir = game_dir / "ZenlessZoneZero_Data" / "StreamingAssets" / "Blocks"
     for block_id in sorted(by_block):
-        path = blocks_dir / f"{block_id}.blk"
-        if path.exists():
+        path = find_resource_block(game_dir, block_id)
+        if path:
             block_paths.append(path)
         else:
-            print(f"  warning: missing block {path.name}")
+            print(f"  warning: missing block {block_id}.blk")
     print(
         f"  perform assets: {len(asset_paths)} paths, {matched} matched, "
         f"{len(block_paths)} blocks"
@@ -414,7 +457,8 @@ def _perform_speakers(
         print("warning: no Perform blocks found; continuing without per-line speakers")
         return {}, set()
 
-    source_to_text, avatar_to_text, option_keys, scan_stats = scan_perform_blocks(block_paths)
+    routes = configured_routes(perform_payload)
+    source_to_text, avatar_to_text, option_keys, scan_stats = scan_perform_blocks(block_paths, set(routes))
     stats.links = scan_stats.links
     stats.sources = scan_stats.sources
     stats.blocks = scan_stats.blocks
@@ -478,16 +522,71 @@ def _perform_speakers(
         )
         stats.avatar_speakers += 1
 
+    links = graph_links(scan_stats.graphs, routes)
+    link_unused_copies(links, scan_stats.graphs, routes, text_map)
+    for key, link in links.items():
+        existing = speakers.get(key)
+        avatars = link["avatars"]
+        display = text_map.get(avatars[0]) if len(avatars) == 1 else None
+        resolved_voices = [(resolve_alias(alias_from_source(voice), alias_map), alias_from_source(voice))
+                           for voice in link["voice_keys"] if alias_from_source(voice)]
+        voice_names = {name for name, _ in resolved_voices if name}
+        if not display and len(voice_names) == 1:
+            display = next(iter(voice_names))
+        voice_aliases = {alias for name, alias in resolved_voices if name == display}
+        alias = avatars[0] if len(avatars) == 1 else (next(iter(voice_aliases)) if len(voice_aliases) == 1 else None)
+        # Exact node fields supersede nearby-string matches, including hidden
+        # identities. Empty/ambiguous avatars do not justify guessing a name.
+        speakers[key] = SpeakerInfo(
+            display or (existing.speaker if existing else None),
+            alias or (existing.alias if existing else None),
+            0.98 if display else (existing.confidence if existing else 0.0),
+            "perform" if display else (existing.source if existing else "none"),
+            bool(link["voice_keys"]) or bool(existing and existing.has_voice),
+            perform=link,
+        )
+    stats.perform_graphs = len(scan_stats.graphs)
+    stats.perform_graph_errors = len(scan_stats.graph_errors)
+    stats.perform_gender_keys = sum(link["explicit_gender"] for link in links.values())
+    stats.perform_copy_keys = sum(bool(link.get("copy_of")) for link in links.values())
+    print(f"  structured Perform: {stats.perform_graphs} assets, {stats.perform_gender_keys} gender keys, {stats.perform_graph_errors} parse failures")
+
+    print("Finding ChatPlus timeline resources...")
+    clips = scan_timeline_clips(game_dir, catalog, perform_payload)
+    timeline_links = link_main_copies(clips, text_map, perform_payload)
+    for key, link in timeline_links.items():
+        avatar = link["avatar"]
+        display = text_map.get(avatar) if avatar else None
+        aliases = {VOICE_RE.fullmatch(voice)[2] for voice in link["voice_keys"]}
+        alias = next(iter(aliases)) if len(aliases) == 1 else None
+        if not display and alias:
+            display = resolve_alias(alias, alias_map)
+        existing = speakers.get(key)
+        # The timeline's avatar is the displayed identity, even when a voice
+        # bank belongs to a character whose identity is hidden in this scene.
+        speakers[key] = SpeakerInfo(
+            display or (existing.speaker if existing else None), alias, 0.95,
+            "timeline", bool(link["voice_keys"]), link,
+        )
+    stats.timeline_clips = len(clips)
+    stats.timeline_mapped = len(timeline_links)
+    print(f"  timeline clips: {len(clips)}, main keys linked: {len(timeline_links)}")
+
     stats.text_ids = len(speakers)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": CACHE_VERSION,
+        "fingerprint": fingerprint,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "speakers": {key: asdict(value) for key, value in speakers.items()},
         "options": sorted(option_keys),
         "stats": asdict(stats),
+        "perform_inventory": {path: {"name": graph.name, "keys": sorted(graph.keys), "gender_conditions": graph.conditions}
+                              for path, graph in scan_stats.graphs.items()},
+        "perform_graph_errors": scan_stats.graph_errors,
     }
-    cache_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    from .writers import _atomic_write_text
+    _atomic_write_text(cache_path, json.dumps(payload, ensure_ascii=False))
     print(f"Cached speaker map: {cache_path}")
     return speakers, option_keys
 

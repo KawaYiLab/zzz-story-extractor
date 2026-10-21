@@ -5,6 +5,7 @@ import pytest
 from zzz_story.extract import (
     DEFAULT_COSTUME_PREFIXES,
     _assign_line_ids,
+    _assign_supplement_ids,
     _cache_root,
     _collapse_gender_pairs,
     _dedupe_records,
@@ -14,6 +15,8 @@ from zzz_story.extract import (
     _normalize_speaker,
     _protagonist_side,
     _record_raw_text,
+    _scene_metadata,
+    _speaker_identity,
     _unknown_costume_forms,
     costume_prefixes,
     extract,
@@ -31,12 +34,14 @@ def test_extract_fixture(tmp_path, monkeypatch):
     text_map = {
         "Main_GalGame_Chapter00_10000002_001": "你好",
         "Main_GalGame_Chapter00_10000002_002": "再见",
+        "Main_GalGame_Chapter00_10000002_002F": "再见",
         "Main_GalGame_Chapter00_9000001_001": "后来场景台词",
         "QuestName_9901": "测试任务",
         "QuestName_9902": "任务二",
         "Main_GalGame_Chapter00_10000002_Option1_03": "选项分支一",
         "Main_GalGame_Chapter00_10000002_Option2_04": "选项分支二",
         "Main_GalGame_Chapter00_10000002_Name_001": "苏茜",
+        "Main_GalGame_Chapter00_10000002_Name_001F": "铃",
         "MainChat_Chapter01_001_01": "聊天内容",
         "Comic_abcdef": "漫画内容",
         "Title_10000002": "「测试场景」",
@@ -122,6 +127,11 @@ def test_extract_fixture(tmp_path, monkeypatch):
         json.loads(line)
         for line in (out / "supplement.jsonl").read_text(encoding="utf-8").splitlines()
     ]
+    assert all(type(row["chapter_order"]) is int for row in records + supplements)
+    assert all(
+        row["chapter_order"] == records[0]["chapter_order"]
+        for row in supplements if row["chapter"] == records[0]["chapter"]
+    )
     season_two = [row for row in supplements if row["source_key"].startswith("CS_21_")]
     assert len(season_two) == 1
     # CS_21 is season 2 chapter 1, i.e. Chapter110 -- not Chapter210 (season 3).
@@ -132,6 +142,7 @@ def test_extract_fixture(tmp_path, monkeypatch):
     assert manifest["source_version"] == "3.2.0"
     assert manifest["validation"]["errors"] == 0
     chapters = {row["token"]: row for row in manifest["chapters"]}
+    assert all(type(row["order"]) is int for row in chapters.values())
     assert chapters["Chapter110"]["supplement_lines"] == 1
     assert chapters["Chapter110"]["order"] > chapters["Chapter00"]["order"]
     coverage = json.loads((out / "coverage.json").read_text(encoding="utf-8"))
@@ -143,6 +154,20 @@ def test_extract_fixture(tmp_path, monkeypatch):
     # Plain fixture lines clean to themselves, so raw_text is omitted.
     assert all(record["raw_text"] is None for record in records)
     assert coverage["raw_text_omitted"] == 6
+    assert manifest["ordering"]["chronology_status"] == "unknown"
+    assert manifest["quality"]["unlinked_comic_lines"] == 1
+    assert galgame[0]["order_source"] == "archive_table"
+    assert galgame[0]["archive_order"] == 0
+    assert galgame[0]["quest_id"] == 9901
+    discarded = [json.loads(line) for line in (out / "discarded.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert {row["source_key"] for row in discarded} == {
+        "CS_00_01_020", "CS_00_01_030",
+        "Main_GalGame_Chapter00_10000002_002F", "Main_GalGame_Chapter00_10000002_Name_001F",
+    }
+    assert manifest["counts"]["discarded_lines"] == 3
+    assert manifest["counts"]["discarded_names"] == 1
+    assert all(row["raw_text"] and row["paired_source_key"] for row in discarded)
+    assert all(not any(key.startswith("_discard") or key == "_paired_source_key" for key in row) for row in records + supplements)
     # Stable ids: chapter token only, no chapter_order prefix.
     assert all(record["line_id"].startswith(("CH00_", "CH01_")) for record in records)
     # The manifest must not leak the local game path.
@@ -183,11 +208,18 @@ def test_extract_fixture(tmp_path, monkeypatch):
     assert accurate_stats.deduped == 0
     accurate_manifest = json.loads((accurate / "manifest.json").read_text(encoding="utf-8"))
     assert accurate_manifest["accuracy_first"] is True
+    assert accurate_manifest["protagonist"] == "mixed"
+    assert (accurate / "discarded.jsonl").read_text(encoding="utf-8") == ""
     accurate_records = [
         json.loads(line)
         for line in (accurate / "story.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert all(record["raw_text"] is not None for record in accurate_records)
+
+    limited = tmp_path / "limited"
+    extract(out_dir=limited, data_dir=data, game_dir=tmp_path / "nogame", no_speakers=True,
+            include_supplement=False, include_lore=False, formats="jsonl", limit=1)
+    assert (limited / "discarded.jsonl").read_text(encoding="utf-8") == ""
 
     with pytest.raises(SystemExit):
         extract(
@@ -209,6 +241,25 @@ def test_cache_root_isolated_for_custom_dataset(tmp_path):
     assert english != default
     assert _cache_root(tmp_path, "CHS") == custom
 
+
+def test_supplement_ids_survive_insertion():
+    old = [{"source_key": "Comic_b"}, {"source_key": "CS_21_01_010"}]
+    _assign_supplement_ids(old)
+    new = [{"source_key": "Comic_a"}] + [dict(row) for row in old]
+    _assign_supplement_ids(new)
+    assert [row["line_id"] for row in new[1:]] == [row["line_id"] for row in old]
+
+
+def test_filters_keep_reviewable_removal_evidence():
+    records = [_rec(1, "准备好了吗，铃？", "妮可"), _rec(2, "准备好了吗，哲？", "妮可")]
+    for i, row in enumerate(records):
+        row["source_key"] = f"key_{i}"
+    kept, count = _filter_branch_lines(records)
+    assert count == 1
+    removed = next(row for row in records if row not in kept)
+    assert removed["_discard_reason"] == "gender_address"
+    assert removed["_paired_source_key"] == "key_1"
+
 def _rec(line_no, text, speaker=None, scene="1", family="GalGame", line_type="dialogue"):
     return {
         "chapter": "Chapter110",
@@ -221,6 +272,29 @@ def _rec(line_no, text, speaker=None, scene="1", family="GalGame", line_type="di
         "text": text,
         "line_type": line_type,
     }
+
+
+def test_review_branch_filter_preserves_semantic_differences():
+    for records in (
+        [_rec(1, "师妹，我们不能打开这扇门。", "仪玄"), _rec(2, "师弟，我们能打开这扇门。", "仪玄")],
+        [_rec(1, "哥哥，今天不去空洞了。", "小孩"), _rec(2, "今天不去空洞了。", "邻居")],
+        [_rec(1, "铃，你会游泳吗？", "仪玄"), _rec(2, "哲，你会游泳吗？", "妮可")],
+    ):
+        kept, count = _filter_branch_lines(records)
+        assert count == 0
+        assert kept == records
+
+
+def test_review_gender_pairs_preserve_negation():
+    records = [_rec(1, "我们不能打开这扇门。", "铃"), _rec(2, "我们能打开这扇门。", "哲")]
+    assert _collapse_gender_pairs(records, "M") == (records, 0)
+
+
+def test_review_dedupe_preserves_props_and_real_repetition():
+    records = [_rec(1, "叮咚。", "门铃"), _rec(2, "叮咚。", None)]
+    assert _dedupe_records(records, "M") == (records, 0)
+    records = [_rec(1, "……", "仪玄"), _rec(2, "……", "仪玄")]
+    assert _dedupe_records(records, "M") == (records, 0)
 
 
 def test_dedupe_keeps_npc_repeats():
@@ -243,8 +317,8 @@ def test_dedupe_drops_protagonist_copies():
         _rec(4, "好的。", "学生铃"),
     ]
     kept, dropped = _dedupe_records(records, "F")
-    assert dropped == 2
-    assert [(r["line_no"], r["speaker"]) for r in kept] == [(1, "铃"), (4, "学生铃")]
+    assert dropped == 1
+    assert [(r["line_no"], r["speaker"]) for r in kept] == [(1, "铃"), (3, None), (4, "学生铃")]
 
 
 def test_dedupe_drops_copied_branch_block():
@@ -257,8 +331,8 @@ def test_dedupe_drops_copied_branch_block():
         _rec(6, "好。", "哲"),
     ]
     kept, dropped = _dedupe_records(records, "F")
-    assert dropped == 3
-    assert [r["line_no"] for r in kept] == [1, 2, 3]
+    assert dropped == 1
+    assert [r["line_no"] for r in kept] == [1, 2, 3, 4, 5]
 
 
 def test_branch_filter_needs_counterpart():
@@ -281,10 +355,8 @@ def test_branch_filter_sibling_pairs():
         _rec(5, "哥哥，吃饭了。", "铃"),
     ]
     kept, dropped = _filter_branch_lines(records)
-    # 哲 speaking is always kept; 哥哥 twins are the female branch and drop;
-    # the surviving 铃 line keeps its only twin gone, so it stays; Belle's
-    # unpaired NPC line stays too.
-    assert [r["line_no"] for r in kept] == [1, 3, 5]
+    # Rephrased and unattributed lines cannot establish a branch pair.
+    assert [r["line_no"] for r in kept] == [1, 2, 3, 4, 5]
 
 
 def test_branch_filter_scoped_to_scene():
@@ -500,3 +572,28 @@ def test_line_id_does_not_depend_on_chapter_order():
     _assign_line_ids(records)
     assert records[0]["line_id"] == first
     assert first.startswith("CH110_GalGame_")
+
+
+def test_scene_metadata_never_claims_chronology():
+    assert _scene_metadata("GalGame", "123000001", {"123000001": (0, 0)}) == {
+        "order_source": "archive_table", "chronology_status": "unknown",
+        "archive_order": 0, "quest_id": None, "quest_source": None,
+    }
+    assert _scene_metadata("Chat", "123000001", {"123000001": (0, 9901)})["quest_id"] is None
+
+
+def test_identity_only_merges_known_forms():
+    assert _speaker_identity("道士哲", DEFAULT_COSTUME_PREFIXES) == ("哲", "道士")
+    assert _speaker_identity("林德薇恩「中挽昼」", DEFAULT_COSTUME_PREFIXES) == ("林德薇恩", "中挽昼")
+    assert _speaker_identity("零号·安比", DEFAULT_COSTUME_PREFIXES) == ("零号·安比", None)
+    assert _speaker_identity("门铃", DEFAULT_COSTUME_PREFIXES) == ("门铃", None)
+
+
+def test_review_reused_output_is_rejected_before_any_writes(tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "supplement.jsonl").write_text("old", encoding="utf-8")
+    with pytest.raises(FileExistsError, match="已有提取产物"):
+        extract(out_dir=out, data_dir=tmp_path / "missing", no_speakers=True, include_supplement=False)
+    assert (out / "supplement.jsonl").read_text(encoding="utf-8") == "old"
+    assert not (out / "manifest.json").exists()

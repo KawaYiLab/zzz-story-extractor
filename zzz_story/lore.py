@@ -11,6 +11,7 @@ from typing import Any
 
 from .clean import clean_text
 from .textmap import TextMap
+from .writers import write_jsonl
 
 # Early CBT1 avatar mapping for Birthday and Stature (01..09)
 EARLY_AVATAR_ATTR_MAP: dict[str, str] = {
@@ -329,14 +330,20 @@ def extract_lore(
     text_map: TextMap,
     avatar_base_data: dict[str, Any] | list[Any] | None,
     out_dir: Path,
+    *,
+    speaker_index=None,
+    accuracy_first: bool = False,
 ) -> dict[str, int]:
     """Extract all worldview / lore categories and output structured Markdown files."""
     lore_dir = out_dir / "lore"
+    if lore_dir.exists():
+        raise FileExistsError(f"设定目录已存在：{lore_dir}；请指定新的 --out，避免混入旧设定")
     lore_dir.mkdir(parents=True, exist_ok=True)
 
     stats: dict[str, int] = {}
 
-    stats.update(_extract_agents(text_map, avatar_base_data, lore_dir / "agents"))
+    stats.update(_extract_agents(text_map, avatar_base_data, lore_dir / "agents",
+                                speaker_index=speaker_index, accuracy_first=accuracy_first))
     stats.update(_extract_equipment(text_map, lore_dir / "equipment", avatar_base_data))
     stats.update(_extract_interknot(text_map, lore_dir / "interknot"))
     stats.update(_extract_cinema(text_map, lore_dir / "cinema"))
@@ -351,6 +358,9 @@ def _extract_agents(
     tm: TextMap,
     avatar_base_data: dict[str, Any] | list[Any] | None,
     agents_dir: Path,
+    *,
+    speaker_index=None,
+    accuracy_first: bool = False,
 ) -> dict[str, int]:
     agents_dir.mkdir(parents=True, exist_ok=True)
 
@@ -384,45 +394,72 @@ def _extract_agents(
             playable.append(e)
 
     # Collect dialogue streams
-    gal_events: dict[str, dict[str, list[tuple[str, str]]]] = defaultdict(lambda: defaultdict(list))
-    chat_events: dict[str, dict[str, list[tuple[str, str]]]] = defaultdict(lambda: defaultdict(list))
-    bubble_events: dict[str, dict[str, list[tuple[str, str]]]] = defaultdict(lambda: defaultdict(list))
+    gal_events: dict[str, dict[str, list[tuple[str, str, str]]]] = defaultdict(lambda: defaultdict(list))
+    chat_events: dict[str, dict[str, list[tuple[str, str, str]]]] = defaultdict(lambda: defaultdict(list))
+    bubble_events: dict[str, dict[str, list[tuple[str, str, str]]]] = defaultdict(lambda: defaultdict(list))
+    dialogue_audit = []
 
     for k, v in tm.items():
+        if k.startswith(("PartnerTalk_", "Chat_PartnerTalk_")):
+            suffix = k.split("_")[-1]
+            # Name metadata and unknown layouts are not dialogue lines.
+            if "_Name" in k or "_name" in k or not re.fullmatch(r"\d+[MF]?", suffix):
+                continue
         if k.startswith("PartnerTalk_GalGame_"):
             parts = k.split("_")
             if len(parts) >= 5:
                 aid = tag_to_aid.get(parts[2].lower())
                 if aid:
-                    gal_events[aid][parts[3]].append((parts[4], _clean(v)))
+                    gal_events[aid][parts[3]].append(("_".join(parts[4:]), _clean(v), k))
         elif k.startswith("PartnerTalk_BubbleStory_"):
             parts = k.split("_")
             if len(parts) >= 4:
                 aid = tag_to_aid.get(parts[2].lower())
                 if aid:
                     lid = parts[4] if len(parts) >= 5 else "01"
-                    bubble_events[aid][parts[3]].append((lid, _clean(v)))
+                    bubble_events[aid][parts[3]].append((lid, _clean(v), k))
         elif k.startswith("PartnerTalk_Chat_Partner"):
             parts = k.split("_")
             if len(parts) >= 4:
                 aid = tag_to_aid.get(parts[2].lower())
                 if aid:
-                    lid = parts[4] if len(parts) >= 5 else "01"
-                    chat_events[aid][parts[3]].append((lid, _clean(v)))
+                    lid = parts[-1] if len(parts) >= 5 else "01"
+                    chat_events[aid]["_".join(parts[3:-1])].append((lid, _clean(v), k))
         elif k.startswith("PartnerTalk_Chat_33"):
             m = re.match(r"PartnerTalk_Chat_33(\d{3})(\d+)_(\d+)", k)
             if m:
                 aid = str(1000 + int(m.group(1)) * 10 + 1)
                 eid = m.group(1) + m.group(2)
-                chat_events[aid][eid].append((m.group(3), _clean(v)))
+                chat_events[aid][eid].append((m.group(3), _clean(v), k))
         elif k.startswith("Chat_PartnerTalk_"):
             parts = k.split("_")
             if len(parts) >= 4:
                 aid = tag_to_aid.get(parts[2].lower())
                 if aid:
-                    eid = parts[3]
+                    eid = "_".join(parts[3:-1]) if len(parts) > 4 else parts[3]
                     lid = parts[-1]
-                    chat_events[aid][eid].append((lid, _clean(v)))
+                    chat_events[aid][eid].append((lid, _clean(v), k))
+
+    def rendered_dialogues(values):
+        available = {key for _, _, key in values}
+        result = []
+        for seq, text, key in sorted(values, key=lambda item: (int(re.match(r"\d+", item[0])[0]), item[0], item[2])):
+            info = speaker_index.lookup(key) if speaker_index else None
+            link = info.perform if info and info.perform else {}
+            peer = link.get("paired_key")
+            peer_info = speaker_index.lookup(peer) if speaker_index and peer else None
+            peer_link = peer_info.perform if peer_info and peer_info.perform else {}
+            removed = (not accuracy_first and link.get("explicit_gender") and link.get("sides") == ["F"]
+                       and peer in available and peer_link.get("explicit_gender") and peer_link.get("sides") == ["M"]
+                       and peer_link.get("paired_key") == key)
+            display = clean_text(info.speaker, "M").text if info and info.speaker else None
+            dialogue_audit.append({"source_key": key, "raw_text": tm.get(key), "text": text,
+                                   "speaker": display, "retained": not removed,
+                                   "reason": "perform_gender_route" if removed else None,
+                                   "paired_source_key": peer if removed else None, "perform": link or None})
+            if not removed:
+                result.append(f"{'【' + display + '】' if display else ''}{text} (`{key}`)")
+        return result
 
     # Identify all Mindscape Cinema prefixes
     all_talent_prefixes: set[str] = set()
@@ -545,21 +582,21 @@ def _extract_agents(
         if aid in gal_events:
             for eid in sorted(gal_events[aid].keys()):
                 title = _clean(tm.get(f"Title_{eid}", f"专属邀约 {eid}"))
-                sorted_lines = [text for _, text in sorted(gal_events[aid][eid], key=lambda x: x[0])]
+                sorted_lines = rendered_dialogues(gal_events[aid][eid])
                 agent_gals.append({"eid": eid, "title": title, "lines": sorted_lines})
 
         # Street chat encounters
         agent_chats: list[dict[str, Any]] = []
         if aid in chat_events:
             for eid in sorted(chat_events[aid].keys()):
-                sorted_lines = [text for _, text in sorted(chat_events[aid][eid], key=lambda x: x[0])]
+                sorted_lines = rendered_dialogues(chat_events[aid][eid])
                 agent_chats.append({"eid": eid, "lines": sorted_lines})
 
         # Street bubble interactions
         agent_bubbles: list[dict[str, Any]] = []
         if aid in bubble_events:
             for eid in sorted(bubble_events[aid].keys()):
-                sorted_lines = [text for _, text in sorted(bubble_events[aid][eid], key=lambda x: x[0])]
+                sorted_lines = rendered_dialogues(bubble_events[aid][eid])
                 agent_bubbles.append({"eid": eid, "lines": sorted_lines})
 
         info = {
@@ -724,8 +761,10 @@ def _extract_agents(
             f"{ag['birthday'] or '-'} | {ag['stature'] or '-'} | {ag['aptitude']} | {w_str} | {cinema_str} | {inter_str} |"
         )
     (agents_dir / "00_代理人全景总览.md").write_text("\n".join(ov_lines), encoding="utf-8")
+    write_jsonl(dialogue_audit, agents_dir / "dialogue-audit.jsonl")
 
-    return {"lore_agents": agent_count}
+    return {"lore_agents": agent_count, "lore_dialogue_candidates": len(dialogue_audit),
+            "lore_dialogue_removed": sum(not row["retained"] for row in dialogue_audit)}
 
 
 def _extract_equipment(
@@ -802,7 +841,7 @@ def _extract_equipment(
     discs.sort(key=lambda x: int(x["id"]) if x["id"].isdigit() else 9999)
 
     disc_md: list[str] = [
-        "# 新艾利都驱动盘唱片物语（全30套调律文献与6重奏分轨物语）\n",
+        f"# 新艾利都驱动盘唱片物语（收录{len(discs)}套调律文献与6重奏分轨物语）\n",
         "> 驱动盘（Drive Disc）不仅是代理人调节以太适配率的核心作战插件，更铭刻着旧文明遗音与新艾利都流传的旋律纪实。每一套完整的驱动盘都是一张拥有6个分轨曲目的EP黑胶唱片，随着音擎转动共鸣，为代理人注入独特的以太战斗节拍。\n",
         "## 驱动盘六大分区与属性调律法则\n",
         "新艾利都音像店（如六分街吟游唱针）将驱动盘规范为六大插槽分区，各自承载不同的调律机制：\n",
@@ -814,7 +853,7 @@ def _extract_equipment(
         "| **IV号位（分区4）** | 战技倾向 | 随机主属性：暴击率 / 暴击伤害 / 攻击力% / 防御力% / 生命值% / 异常精通 |",
         "| **V号位（分区5）** | 属性穿透 | 随机主属性：属性伤害加成（火/冰/电/物/以太/风） / 穿透率 / 攻防生% |",
         "| **VI号位（分区6）** | 核心机制 | 随机主属性：能量自动回复 / 冲击力 / 异常掌控 / 攻防生% |\n",
-        "## 全 30 套驱动盘战术流派与唱片速查总览\n",
+        f"## 收录 {len(discs)} 套驱动盘战术流派与唱片速查总览\n",
         "| 编号 | 唱片名称 | 战术流派 | 官方定位特征 | 2件套共鸣效果 | 4件套战术机制概要 | 分轨收录 |",
         "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
     ]
@@ -1010,9 +1049,9 @@ def _extract_equipment(
     engines.sort(key=lambda x: x["sort_key"])
 
     engine_md = [
-        "# 新艾利都音擎档案与专属题记（全100款核心改装与战士名言录）\n",
+        f"# 新艾利都音擎档案与专属题记（收录{len(engines)}款核心改装与战士名言录）\n",
         "> 音擎（W-Engine）是新艾利都空洞作战最核心的高能动力装置与战术武器。每一款特制音擎的外壳与调谐回路，都封存着设计者的执念、改装工艺与战士在裂隙深处的烈火足迹。高阶专属音擎的铭牌与机械外壳上，更铭刻着代理人出生入死时的经典名言与题记。\n",
-        "## 全 100 款音擎品质与战术回路速查总览\n",
+        f"## 收录 {len(engines)} 款音擎品质与战术回路速查总览\n",
         "| 品质 | 音擎名称 | 类别 / 专属归属 | 所属阵营 | 核心改装回路（被动） | 专属题记名言录 |",
         "| :--- | :--- | :--- | :--- | :--- | :--- |",
     ]
@@ -1168,7 +1207,7 @@ def _extract_equipment(
     bangboo_md = [
         "# 新艾利都邦布机体全景图鉴与核心技能档案\n",
         "> 邦布（Bangboo）是新艾利都社会不可或缺的人工智能机械生命，也是空洞探索中唯一具备极高以太适性的探索向导。\n",
-        "> 本图鉴完整收录全城共 42 款实装战斗伴随与特型向导邦布（22 款 S 级机体、19 款 A 级机体与 1 款特型伴随向导），全系严格按「S 级巅峰机体 → A 级实用机体 → 特型向导机体」品质阶梯与官方机体代号（Numerical ID）递增严格排序，完整汇编机体格言、主动技回路、邦布连携技、专属额外能力（Lv.1 ~ Lv.5 满级）、零号空洞助战鸣徽及萌趣战斗台词。\n",
+        f"> 本图鉴收录 {len(sorted_bangboos)} 款战斗伴随与特型向导邦布，按「S 级机体 → A 级机体 → 特型向导机体」品质与机体代号递增排序，汇编机体格言、主动技回路、邦布连携技、专属额外能力、零号空洞助战鸣徽及战斗台词。\n",
         "## 邦布全景机体速查总览表\n",
         "| 品质 | 邦布名称 (英文代号) | 战术/阵营偏向 | 主动技回路 | 连携技 | 专属额外能力 | 萌趣台词摘录 |",
         "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
@@ -1360,8 +1399,8 @@ def _extract_equipment(
     col_md = [
         "# 录像店展示架与收藏品风味物语\n",
         "> Random Play 货架与展柜上陈列的纪念品、市井手办、潮流玩偶与音擎微缩模型，记录着六分街街坊、委托人与代理人的日常趣事与深层回忆。\n",
-        "> 本档案完整收录全城共 132 件实装展架藏品，全系严格按「纪事珍存（8件） → 活动限定（3件） → 潮流藏品（23件） → 音擎模型（98件）」四大官方分类与藏品编号（Numerical ID）递增严格排序。\n",
-        "## 全 132 件展架藏品风味速查总览表\n",
+        f"> 本档案收录 {len(sorted_collections)} 件展架藏品，按「纪事珍存 → 活动限定 → 潮流藏品 → 音擎模型」分类与藏品编号递增排序。\n",
+        f"## 收录 {len(sorted_collections)} 件展架藏品风味速查总览表\n",
         "| 编号 | 展品名称 | 官方分类 | 所属系列 / 主题 | 展品风味简介 |",
         "| :--- | :--- | :--- | :--- | :--- |",
     ]
@@ -2754,7 +2793,7 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "本目录由 `zzz-story-extractor` 自动解析自游戏文本包与配置表，完整收录了主线对话之外的全部核心世界观与深层文献。\n",
         "## 目录导览\n",
         "### 1. 代理人全景与身世秘史 (`lore/agents/`)",
-        "- [00_代理人全景总览](agents/00_代理人全景总览.md)：全 72 位代理人基本资料总览汇总表",
+        f"- [00_代理人全景总览](agents/00_代理人全景总览.md)：收录 {stats.get('lore_agents', 0)} 位代理人基本资料总览汇总表",
         "- [01_狡兔屋](agents/01_狡兔屋.md)：安比、猫又、妮可、比利、星徽·比利",
         "- [02_白祇重工](agents/02_白祇重工.md)：珂蕾妲、安东、本、格莉丝",
         "- [03_维多利亚家政](agents/03_维多利亚家政.md)：可琳、莱卡恩、丽娜、艾莲",
@@ -2768,15 +2807,15 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "- [11_达识结社与空巡局](agents/11_达识结社与空巡局.md)：维琳娜、诺姆、希格莉德、克拉蕾、洛克茜、蕾米埃尔",
         "- [12_漫游者与特别存在](agents/12_漫游者与特别存在.md)：哲、铃、流浪猫小黑等\n",
         "### 2. 装备文献与造物图鉴 (`lore/equipment/`)",
-        "- [01_驱动盘唱片物语](equipment/01_驱动盘唱片物语.md)：全 30 套驱动盘唱片文献、调律属性与 6 重奏分轨物语全集",
-        "- [02_音擎档案与题记](equipment/02_音擎档案与题记.md)：全 100 款音擎战术构造、核心改装回路与专属题记名言录全集",
-        "- [03_邦布机体图鉴](equipment/03_邦布机体图鉴.md)：全 42 款邦布机体全景图鉴（22款S级、19款A级与特型向导机体）、机体格言、技能回路、助战鸣徽与萌趣台词",
-        "- [04_收藏展架与风味展品](equipment/04_收藏展架与风味展品.md)：全 132 件收藏展架珍品全集（纪事珍存、活动限定、三Z潮玩套组与音擎微缩模型）、风味物语与题记名言\n",
+        f"- [01_驱动盘唱片物语](equipment/01_驱动盘唱片物语.md)：收录 {stats.get('lore_discs', 0)} 套驱动盘唱片文献、调律属性与 6 重奏分轨物语",
+        f"- [02_音擎档案与题记](equipment/02_音擎档案与题记.md)：收录 {stats.get('lore_w_engines', 0)} 款音擎战术构造、核心改装回路与专属题记名言录",
+        f"- [03_邦布机体图鉴](equipment/03_邦布机体图鉴.md)：收录 {stats.get('lore_bangboos', 0)} 款邦布机体图鉴、机体格言、技能回路、助战鸣徽与台词",
+        f"- [04_收藏展架与风味展品](equipment/04_收藏展架与风味展品.md)：收录 {stats.get('lore_collectibles', 0)} 件展架藏品、风味物语与题记名言\n",
         "### 3. 绳网论坛与通讯 (`lore/interknot/`)",
         "- [01_委托人任务档案](interknot/01_委托人任务档案.md)：全量绳网论坛委托求助信（发帖人/正文/附言/楼层热评）与各街区实装委托档案（委托人/空洞舞台/三星指标/阶段链），严格按五大官方板块与编号递增排序",
         "- [02_绳网私信与手机短信](interknot/02_绳网私信与手机短信.md)：即时通讯私信会话流（日常吐槽、八卦求助、协会联络）\n",
         "### 4. Random Play 录像店影音档案 (`lore/cinema/`)",
-        "- [01_旧文明电影与影评](cinema/01_旧文明电影与影评.md)：录像店全部 17 部经典影片长梗概、题材流派、原声台词选摘与全量顾客大众影评\n",
+        f"- [01_旧文明电影与影评](cinema/01_旧文明电影与影评.md)：收录 {stats.get('lore_movies', 0)} 部影片长梗概、题材流派、原声台词选摘与顾客影评\n",
         "### 5. 新艾利都世界观百科与空洞规则 (`lore/glossary/`)",
         "- [01_空洞与以太规则](glossary/01_空洞与以太规则.md)：主线全章节历程纪事、以太物理规则、新艾利都生存法则与全量以太侵蚀病理图鉴",
         "- [02_空洞鸣徽与古物预言](glossary/02_空洞鸣徽与古物预言.md)：零号空洞全 25 大流派鸣徽考据、古物预言与代理人专属共鸣密藏\n",

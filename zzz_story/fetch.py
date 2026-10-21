@@ -13,7 +13,7 @@ import requests
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CACHE_ROOT = PROJECT_ROOT / "data" / "cache"
-DEFAULT_VERSION = "3.2.0"
+DEFAULT_VERSION = "3.3.0"
 
 GITEA_RAW = "https://git.mero.moe/dimbreath/ZenlessData/raw/branch/master"
 GITHUB_RAW = "https://raw.githubusercontent.com/malu-no996/ZenlessData/master"
@@ -87,14 +87,14 @@ def _http_get(url: str) -> requests.Response:
     return response
 
 
-def download_file(rel_path: str, destination: Path, refresh: bool = False) -> Path:
+def download_file(rel_path: str, destination: Path, refresh: bool = False, *, bases: tuple[str, ...] | None = None) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists() and destination.stat().st_size > 1000 and not refresh:
         return destination
 
     tmp = destination.with_suffix(destination.suffix + ".part")
     errors: list[str] = []
-    for base in (GITEA_RAW, GITHUB_RAW):
+    for base in bases or (GITEA_RAW, GITHUB_RAW):
         url = f"{base}/{rel_path}"
         try:
             response = _http_get(url)
@@ -129,42 +129,55 @@ def download_file(rel_path: str, destination: Path, refresh: bool = False) -> Pa
 SOURCE_VERSION_CACHE = "source_version.txt"
 
 
-def fetch_source_version(cache_dir: Path | None = None, refresh: bool = False) -> str:
-    """Latest ZenlessData version tag.
+SOURCE_PROVENANCE = "source_provenance.json"
 
-    The lookup costs a network round-trip (and up to 20s of timeout when
-    offline), so the answer is cached next to the data and only refreshed
-    explicitly.  A failed lookup is never cached, otherwise a single offline
-    run would pin a stale version forever.
-    """
-    cached = cache_dir / SOURCE_VERSION_CACHE if cache_dir else None
-    if cached is not None and cached.exists() and not refresh:
-        value = cached.read_text(encoding="utf-8").strip()
-        if value:
-            return value
 
-    version = ""
+def _verified_provenance(cache_dir: Path, required_files: list[str] | None = None) -> dict | None:
     try:
-        response = requests.get(
-            f"{GITEA_API}/commits?limit=1",
-            timeout=20,
-            headers={"User-Agent": "zzz-story-extractor/0.1"},
-        )
+        provenance = read_json(cache_dir / SOURCE_PROVENANCE)
+        if not isinstance(provenance, dict):
+            return None
+        files = provenance.get("files")
+        if not isinstance(files, dict) or not files or not provenance.get("commit"):
+            return None
+        if required_files and not set(required_files).issubset(files):
+            return None
+        for rel, metadata in files.items():
+            path = (cache_dir / rel).resolve()
+            if not path.is_relative_to(cache_dir.resolve()):
+                return None
+            if sha256_file(path) != metadata["sha256"]:
+                return None
+        return provenance
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def fetch_source_version(cache_dir: Path | None = None, refresh: bool = False, *, required_files: list[str] | None = None) -> str:
+    """Return only a version bound to the actual input files, never latest upstream.
+
+    Legacy source_version.txt is a hint, not proof of the files' version.
+    Custom datasets may provide source_provenance.json with file hashes.
+    """
+    if cache_dir is None:
+        return "unknown"
+    provenance = _verified_provenance(cache_dir, required_files)
+    version = provenance.get("version") if provenance else None
+    return version if isinstance(version, str) and version else "unknown"
+
+
+def _upstream_snapshot() -> tuple[str, str]:
+    """Resolve one commit before downloading, keeping all tables in one snapshot."""
+    with requests.get(f"{GITEA_API}/commits?limit=1", timeout=20,
+                      headers={"User-Agent": "zzz-story-extractor/0.1"}) as response:
         response.raise_for_status()
         payload = response.json()
-        message = payload[0]["commit"]["message"] if payload else ""
-        match = re.search(r"(?:Win|REL)(\d+\.\d+\.\d+)", message, re.IGNORECASE)
-        if match:
-            version = match.group(1)
-    except Exception:  # noqa: BLE001 - metadata only
-        pass
-
-    if not version:
-        return DEFAULT_VERSION
-    if cached is not None:
-        cached.parent.mkdir(parents=True, exist_ok=True)
-        cached.write_text(version + "\n", encoding="utf-8")
-    return version
+    commit = payload[0]["sha"]
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+        raise ValueError("upstream did not return a valid commit SHA")
+    message = payload[0]["commit"]["message"]
+    match = re.search(r"(?:Win|REL)(\d+\.\d+\.\d+)", message, re.IGNORECASE)
+    return commit, match.group(1) if match else "unknown"
 
 
 def _language_files(lang: str) -> list[str]:
@@ -187,7 +200,6 @@ def ensure_data(
     """Return absolute paths for the files the extractor needs."""
     lang = lang.upper()
     required = list(REQUIRED_FILES) + _language_files(lang)
-    result: dict[str, Path] = {}
 
     if data_dir is not None:
         missing = [rel for rel in required if not (data_dir / rel).exists()]
@@ -195,12 +207,36 @@ def ensure_data(
             raise FileNotFoundError("missing files under data-dir:\n" + "\n".join(missing))
         return {rel: data_dir / rel for rel in required}
 
-    version = DEFAULT_VERSION
-    target = CACHE_ROOT / version
+    target = CACHE_ROOT / DEFAULT_VERSION
     print(f"Preparing ZenlessData cache at {target}")
-    for rel in required:
-        result[rel] = download_file(rel, target / rel, refresh=refresh)
-    return result
+    if not refresh and all((target / rel).is_file() for rel in required):
+        if (target / SOURCE_PROVENANCE).exists() and _verified_provenance(target, required) is None:
+            raise ValueError("缓存来源哈希不一致或不完整；请用 --refresh 重建完整快照")
+        return {rel: target / rel for rel in required}
+
+    # Download the entire required snapshot before replacing any existing data.
+    # A failed refresh preserves the old cache. Hash verification detects an
+    # interrupted replacement instead of labeling mixed files as one version.
+    import tempfile
+    from .writers import write_json
+    target.parent.mkdir(parents=True, exist_ok=True)
+    commit, version = _upstream_snapshot()
+    bases = (f"https://git.mero.moe/dimbreath/ZenlessData/raw/commit/{commit}",
+             f"https://raw.githubusercontent.com/malu-no996/ZenlessData/{commit}")
+    with tempfile.TemporaryDirectory(prefix="snapshot-", dir=target.parent) as staging:
+        stage = Path(staging)
+        for rel in required:
+            download_file(rel, stage / rel, refresh=True, bases=bases)
+        provenance = {"commit": commit, "version": version, "files": {
+            rel: {"sha256": sha256_file(stage / rel), "bytes": (stage / rel).stat().st_size}
+            for rel in required
+        }}
+        for rel in required:
+            destination = target / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(stage / rel, destination)
+        write_json(target / SOURCE_PROVENANCE, provenance)
+    return {rel: target / rel for rel in required}
 
 
 def detect_game_dir(explicit: Path | None = None) -> Path | None:

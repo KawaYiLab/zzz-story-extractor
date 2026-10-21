@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import gzip
 import json
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import requests
+
+from .chapters import CHAPTER_ORDER_SCALE
 
 BUNDLE_FORMAT = 1
 UPLOAD_PATH = "/v1/admin/story/corpus"
@@ -49,11 +52,79 @@ def build_bundle(out_dir: Path) -> dict[str, Any]:
     supplement = out_dir / "supplement.jsonl"
     if supplement.is_file():
         bundle["supplement"] = supplement.read_text(encoding="utf-8")
+    _normalize_chapter_orders(bundle)
     lore_dir = out_dir / "lore"
     if lore_dir.is_dir():
         for path in sorted(lore_dir.rglob("*.md")):
             bundle["lore"][path.relative_to(lore_dir).as_posix()] = path.read_text(encoding="utf-8")
     return bundle
+
+
+def _normalize_chapter_orders(bundle: dict[str, Any]) -> None:
+    """Upgrade pre-integer outputs in memory, preserving their chapter ordering."""
+    documents: dict[str, tuple[list[str], dict[int, dict]]] = {}
+    manifest = bundle.get("manifest")
+    scale = manifest.get("chapter_order_scale") if isinstance(manifest, dict) else None
+    if scale is not None and (type(scale) is not int or scale not in (1, CHAPTER_ORDER_SCALE)):
+        raise UploadError("manifest.json chapter_order_scale 必须为 1 或 10")
+    legacy = False
+    for name in ("story", "supplement"):
+        raw = bundle[name]
+        if raw is None:
+            continue
+        lines = raw.splitlines(keepends=True)
+        rows: dict[int, dict] = {}
+        for index, line in enumerate(lines):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError as exc:
+                raise UploadError(f"{name}.jsonl 第 {index + 1} 行解析失败：{exc}") from exc
+            if not isinstance(row, dict):
+                raise UploadError(f"{name}.jsonl 第 {index + 1} 行必须是 JSON 对象")
+            rows[index] = row
+            legacy |= isinstance(row.get("chapter_order"), float)
+        documents[name] = lines, rows
+
+    if scale == CHAPTER_ORDER_SCALE:
+        legacy = False  # An explicit new scale must never be multiplied again.
+    elif scale == 1:
+        legacy = True
+
+    for name, (lines, rows) in documents.items():
+        for index, row in rows.items():
+            if "chapter_order" not in row:
+                continue
+            context = f"{name}.jsonl 第 {index + 1} 行 chapter_order"
+            value = row["chapter_order"]
+            if legacy:
+                value = _scale_legacy_order(value, context)
+            if type(value) is not int or not -(2**63) <= value < 2**63:
+                raise UploadError(f"{context} 必须是 64 位整数")
+            if legacy:
+                row["chapter_order"] = value
+                ending = "\r\n" if lines[index].endswith("\r\n") else "\n" if lines[index].endswith("\n") else ""
+                lines[index] = json.dumps(row, ensure_ascii=False, separators=(",", ":")) + ending
+        if legacy:
+            bundle[name] = "".join(lines)
+
+    # Both JSONL files and the chapter index share the same scale.  Scaling
+    # only floating-point rows would move interludes behind later chapters.
+    manifest = bundle.get("manifest")
+    if legacy and isinstance(manifest, dict):
+        for index, chapter in enumerate(manifest.get("chapters", [])):
+            if isinstance(chapter, dict) and "order" in chapter:
+                chapter["order"] = _scale_legacy_order(chapter["order"], f"manifest.json chapters[{index}].order")
+        manifest["chapter_order_scale"] = CHAPTER_ORDER_SCALE
+
+
+def _scale_legacy_order(value: Any, context: str) -> int:
+    if type(value) in (int, float):
+        scaled = Decimal(str(value)) * CHAPTER_ORDER_SCALE
+        if scaled.is_finite() and scaled == scaled.to_integral_value() and -(2**63) <= scaled < 2**63:
+            return int(scaled)
+    raise UploadError(f"{context} 无法无损转换为 64 位整数，请重新运行 extract")
 
 
 def encode_bundle(bundle: dict[str, Any]) -> bytes:

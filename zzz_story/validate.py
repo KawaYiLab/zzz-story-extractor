@@ -47,7 +47,11 @@ def validate_records(records: list[dict], supplements: list[dict] | None = None)
         issues.append(Issue("error", "empty-story", "主线记录为空，抽取参数或数据源可能有问题"))
         return issues
 
-    ids = Counter(row.get("line_id") for row in records)
+    all_rows = records + (supplements or [])
+    missing = sum(not isinstance(row.get("line_id"), str) or not row["line_id"].strip() for row in all_rows)
+    if missing:
+        issues.append(Issue("error", "missing-line-id", f"{missing} 条记录缺少有效 line_id"))
+    ids = Counter(row["line_id"] for row in all_rows if isinstance(row.get("line_id"), str) and row["line_id"].strip())
     duplicates = sum(count - 1 for count in ids.values() if count > 1)
     if duplicates:
         example = next(line_id for line_id, count in ids.items() if count > 1)

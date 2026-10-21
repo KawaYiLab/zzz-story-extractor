@@ -11,9 +11,9 @@ from pathlib import Path
 import requests
 
 from . import __version__
-from .catalog import Catalog, find_catalog_block, map_story_assets, story_asset_paths
+from .catalog import Catalog, find_catalog_block, find_resource_block, map_story_assets, story_asset_paths
 from .diff import diff_outputs, format_diff
-from .extract import extract
+from .extract import extract, _cache_root
 from .fetch import (
     DEFAULT_VERSION,
     detect_game_dir,
@@ -22,6 +22,7 @@ from .fetch import (
     read_json,
 )
 from .lore import extract_lore
+from .speakers import build_speaker_index
 from .textmap import load_text_map
 from .upload import UploadError, build_bundle, encode_bundle, upload
 from .validate import validate_output
@@ -85,6 +86,9 @@ def _build_parser() -> argparse.ArgumentParser:
     lore_parser.add_argument("--out", type=Path, default=Path("out"), help="output directory")
     lore_parser.add_argument("--data-dir", type=Path, default=None, help="local ZenlessData clone")
     lore_parser.add_argument("--refresh", action="store_true", help="re-download ZenlessData files")
+    lore_parser.add_argument("--game-dir", type=Path, default=None, help="local game resources for dialogue evidence")
+    lore_parser.add_argument("--no-speakers", action="store_true", help="skip local dialogue evidence")
+    lore_parser.add_argument("--accuracy-first", action="store_true", help="retain both dialogue routes")
 
     upload_parser = sub.add_parser(
         "upload",
@@ -109,7 +113,7 @@ def _doctor(args: argparse.Namespace) -> int:
     print(f"zzz-story {__version__}")
     ok = True
 
-    for module in ("requests", "ooz", "xxhash", "cryptography"):
+    for module in ("requests", "ooz", "xxhash", "cryptography", "UnityPy"):
         try:
             __import__(module)
             print(f"  dependency {module}: ok")
@@ -138,7 +142,7 @@ def _doctor(args: argparse.Namespace) -> int:
         perform = read_json(data_paths["FileCfg/PerformTemplateTb.json"])
         assets = story_asset_paths(perform)
         by_block, matched = map_story_assets(catalog, assets)
-        existing = [block for block in by_block if (game_dir / "ZenlessZoneZero_Data" / "StreamingAssets" / "Blocks" / f"{block}.blk").exists()]
+        existing = [block for block in by_block if find_resource_block(game_dir, block)]
         print(f"  catalog: {catalog_path.name} ({catalog_path.stat().st_size / 1e6:.1f} MB)")
         print(f"  perform assets: {len(assets)} paths, {matched} matched, {len(existing)} blocks")
         if not existing:
@@ -259,7 +263,14 @@ def main(argv: list[str] | None = None) -> int:
             text_map = load_text_map(data_paths, language=args.lang)
             avatar_path = data_paths.get("FileCfg/AvatarBaseTemplateTb.json")
             avatar_base = read_json(avatar_path) if avatar_path and avatar_path.exists() else None
-            stats = extract_lore(text_map, avatar_base, out)
+            speaker_index, _ = build_speaker_index(
+                text_map=text_map,
+                text_keys={key for key in text_map.keys() if key.startswith(("PartnerTalk_", "Chat_PartnerTalk_"))},
+                data_paths=data_paths, game_dir=detect_game_dir(args.game_dir),
+                cache_path=_cache_root(args.data_dir, args.lang) / "speakers_cache.json",
+                no_speakers=args.no_speakers,
+            )
+            stats = extract_lore(text_map, avatar_base, out, speaker_index=speaker_index, accuracy_first=args.accuracy_first)
             print("")
             print("Worldbuilding lore extraction completed successfully!")
             print(f"  agents: {stats.get('lore_agents', 0)}")

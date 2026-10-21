@@ -31,3 +31,8 @@ def test_no_variant_is_none():
     cleaned = clean_text("普通文本", "F")
     assert cleaned.text == "普通文本"
     assert cleaned.variants is None
+
+
+def test_layout_variant_preserves_inline_position():
+    raw = "前缀{LAYOUT_MOBILE#甲}{LAYOUT_CONTROLLER#乙}中间{LAYOUT_MOBILE#丙}{LAYOUT_CONTROLLER#丁}后缀"
+    assert clean_text(raw).text == "前缀甲中间丙后缀"

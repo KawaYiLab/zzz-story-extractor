@@ -55,27 +55,16 @@ def _split_variants(raw: str) -> tuple[list[tuple[str | None, str]], bool]:
 
 
 def _choose_layout(raw: str) -> str:
-    chosen: list[str] | None = None
-    fallback: list[str] | None = None
-
-    def repl(match: re.Match[str]) -> str:
-        nonlocal chosen, fallback
-        kind, value = match.group(1), match.group(2)
-        if fallback is None:
-            fallback = []
-        fallback.append(value)
-        if kind == "MOBILE":
-            if chosen is None:
-                chosen = []
-            chosen.append(value)
-        return ""
-
-    stripped = _LAYOUT_RE.sub(repl, raw)
-    if chosen is not None:
-        return stripped + "".join(chosen)
-    if fallback is not None:
-        return stripped + "".join(fallback)
-    return stripped
+    # Layout variants occur in adjacent groups; select each group at its
+    # original location instead of appending all selected text at the end.
+    group_re = re.compile(r"(?:\{LAYOUT_[A-Z_]+#[^{}]*\})+")
+    def choose(match: re.Match[str]) -> str:
+        variants = _LAYOUT_RE.findall(match.group(0))
+        mobile = [value for kind, value in variants if kind == "MOBILE"]
+        if mobile:
+            return "".join(mobile)
+        return variants[0][1] if variants else match.group(0)
+    return group_re.sub(choose, raw)
 
 
 def _strip_markup(raw: str) -> str:

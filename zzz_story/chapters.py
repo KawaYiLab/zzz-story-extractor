@@ -1,7 +1,7 @@
 """Chapter labels and ordering.
 
 The token map is deliberately data-driven: unknown tokens are kept and get a
-derived label instead of being dropped.  The labels below are the 3.2.0 main
+derived label instead of being dropped.  The labels below are the 3.3.0 main
 story order and can be edited when a new version adds chapters.
 """
 
@@ -25,7 +25,7 @@ ORDERED_TOKENS: list[str] = [
     "07", "070",
     "08", "09", "090",
     "110", "120", "130", "140", "150", "160", "170", "180", "190",
-    "210", "220", "230",
+    "210", "220", "230", "240",
 ]
 
 LABELS: dict[str, str] = {
@@ -58,9 +58,13 @@ LABELS: dict[str, str] = {
     "210": "第三季 第一章 某个梦游者的自白",
     "220": "第三季 第二章 漫长的告别",
     "230": "第三季 第三章 她与她的隐秘往事",
+    "240": "第三季 第四章 重返天空的旅程",
 }
 
-_INDEX = {token: i for i, token in enumerate(ORDERED_TOKENS)}
+# Leave integer slots between chapters for supplement-only interludes.  The
+# server's chapter_order is i64, so fractional positions must not reach JSONL.
+CHAPTER_ORDER_SCALE = 10
+_INDEX = {token: i * CHAPTER_ORDER_SCALE for i, token in enumerate(ORDERED_TOKENS)}
 _CHAPTER_RE = re.compile(r"^Chapter(?P<short>.+)$", re.IGNORECASE)
 _SEASON_CHAPTER_RE = re.compile(r"^([1-9])(\d)$")
 
@@ -86,10 +90,10 @@ def chapter_info(token: str) -> ChapterInfo:
     if short in _INDEX:
         return ChapterInfo(token, short, _INDEX[short], LABELS[short], True)
 
-    # Best-effort derivation for future chapters.  Examples: 240 -> S2 ch4
-    # (3-digit tokens: first digit is the zero-based season), 300 -> S3 ch0.
+    # Best-effort derivation for future chapters. Examples: 250 -> S3 ch5
+    # (3-digit tokens: first digit is the zero-based season), 300 -> S4 ch0.
     derived = _derive(short)
-    return ChapterInfo(token, short, 10_000 + derived[0], derived[1], False)
+    return ChapterInfo(token, short, (10_000 + derived[0]) * CHAPTER_ORDER_SCALE, derived[1], False)
 
 
 def _derive(short: str) -> tuple[int, str]:
@@ -120,7 +124,7 @@ def season_chapter_token(season: int, chapter: int) -> str:
     """Main-story token for ``第<season>季 第<chapter>章``.
 
     The 3.2.0 numbering makes the hundreds digit mean "season - 1", so
-    2.1 -> 110, 3.1 -> 210 and a future 3.4 -> 240.  ``_derive`` is the exact
+    2.1 -> 110, 3.1 -> 210 and 3.4 -> 240. ``_derive`` is the exact
     inverse of this function; keep the two in sync.
     """
     if season < 1 or chapter < 0:

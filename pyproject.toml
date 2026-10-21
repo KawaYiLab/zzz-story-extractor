@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zzz-story-extractor"
-version = "0.2.0"
+version = "0.3.0"
 description = "Extract Zenless Zone Zero main-story text with per-line speakers."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,6 +13,7 @@ dependencies = [
   "pyooz>=0.0.8",
   "xxhash>=4.0",
   "cryptography>=42",
+  "UnityPy>=1.25.4,<2",
 ]
 
 [project.optional-dependencies]

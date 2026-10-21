@@ -45,6 +45,83 @@ def test_missing_story_is_a_clear_error(tmp_path):
         build_bundle(tmp_path)
 
 
+def test_legacy_bundle_scales_all_chapter_orders_without_losing_interludes(tmp_path):
+    out = make_output(tmp_path)
+    story_rows = [
+        {"chapter": "Chapter01", "chapter_order": 2, "text": "主线", "speaker_confidence": 0.5},
+        {"chapter": "Chapter02", "chapter_order": 3, "text": "下一章"},
+    ]
+    supplement_rows = [
+        {"chapter": "Chapter01", "chapter_order": 2.0, "text": "补充"},
+        {"chapter": "Chapter015", "chapter_order": 2.5, "text": "间章"},
+        {"chapter": "Chapter052", "chapter_order": 9.2, "text": "第五章补充"},
+        {"chapter": "Chapter058", "chapter_order": 9.8, "text": "第五章尾声"},
+        {"chapter": "CS_Unknown", "chapter_order": 900.0, "text": "其他过场"},
+        {"chapter": "Comic", "chapter_order": 999, "text": "漫画"},
+    ]
+    for name, rows in (("story", story_rows), ("supplement", supplement_rows)):
+        (out / f"{name}.jsonl").write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8"
+        )
+    manifest = {"source_version": "3.2.0", "chapters": [
+        {"token": "Chapter01", "order": 2},
+        {"token": "Chapter015", "order": 2.5},
+        {"token": "Chapter02", "order": 3},
+    ]}
+    (out / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    original = {name: (out / name).read_bytes() for name in ("story.jsonl", "supplement.jsonl", "manifest.json")}
+
+    bundle = build_bundle(out)
+    story = [json.loads(line) for line in bundle["story"].splitlines()]
+    supplement = [json.loads(line) for line in bundle["supplement"].splitlines()]
+    assert [row["chapter_order"] for row in story] == [20, 30]
+    assert [row["chapter_order"] for row in supplement] == [20, 25, 92, 98, 9000, 9990]
+    assert all(type(row["chapter_order"]) is int for row in story + supplement)
+    assert [chapter["order"] for chapter in bundle["manifest"]["chapters"]] == [20, 25, 30]
+    for before, after in zip(story_rows + supplement_rows, story + supplement):
+        assert {key: value for key, value in before.items() if key != "chapter_order"} == {
+            key: value for key, value in after.items() if key != "chapter_order"
+        }
+    assert all((out / name).read_bytes() == raw for name, raw in original.items())
+    assert encode_bundle(build_bundle(out)) == encode_bundle(bundle)
+
+
+def test_integer_bundle_keeps_original_jsonl_bytes_and_other_floats(tmp_path):
+    out = make_output(tmp_path)
+    raw = '{ "chapter": "Chapter01", "chapter_order": 20, "speaker_confidence": 0.5, "text": "主线" }\n\n'
+    (out / "story.jsonl").write_text(raw, encoding="utf-8")
+    bundle = build_bundle(out)
+    assert bundle["story"] == raw
+
+
+def test_review_explicit_scale_rejects_fractional_new_orders(tmp_path):
+    out = make_output(tmp_path)
+    (out / "manifest.json").write_text(json.dumps({"chapter_order_scale":10}), encoding="utf-8")
+    (out / "story.jsonl").write_text('{"chapter_order":20,"text":"甲"}\n', encoding="utf-8")
+    (out / "supplement.jsonl").write_text('{"chapter_order":2.5,"text":"乙"}\n', encoding="utf-8")
+    with pytest.raises(UploadError, match="chapter_order"):
+        build_bundle(out)
+
+
+@pytest.mark.parametrize("value", [9.25, True, None, "1.0", 2**63, float("inf"), float("nan")])
+def test_invalid_chapter_order_is_reported_before_upload(tmp_path, value):
+    out = make_output(tmp_path)
+    row = {"chapter": "Chapter00", "chapter_order": value, "text": "补充"}
+    (out / "supplement.jsonl").write_text("\n" + json.dumps(row) + "\n", encoding="utf-8")
+    with pytest.raises(UploadError, match="supplement.jsonl 第 2 行 chapter_order"):
+        build_bundle(out)
+
+
+def test_cli_rejects_invalid_jsonl_before_prompting_for_password(tmp_path, monkeypatch, capsys):
+    out = make_output(tmp_path)
+    (out / "supplement.jsonl").write_text("\n{broken}\n", encoding="utf-8")
+    def unexpected_prompt(*args):
+        pytest.fail("invalid bundles must be rejected before login")
+    monkeypatch.setattr("getpass.getpass", unexpected_prompt)
+    assert main(["upload", "--out", str(out), "--server", "https://example.test", "--account", "boss"]) == 2
+    assert "supplement.jsonl 第 2 行解析失败" in capsys.readouterr().err
+
+
 class FakeServer:
     """Records requests; answers like ik-server's login / upload / logout."""
 

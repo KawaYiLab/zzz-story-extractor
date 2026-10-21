@@ -34,7 +34,7 @@ def test_empty_story_is_an_error():
 
 
 def test_unknown_chapter_is_only_a_warning():
-    records = [_line("A1", "Chapter240", "第三季 第4章")]
+    records = [_line("A1", "Chapter250", "第三季 第5章")]
     issues = validate_records(records)
     assert [issue.code for issue in issues] == ["unknown-chapter"]
     assert issues[0].level == "warning"

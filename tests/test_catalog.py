@@ -1,4 +1,6 @@
-from zzz_story.catalog import Catalog, map_story_assets, story_asset_paths
+from zzz_story.catalog import (
+    Catalog, find_catalog_block, find_resource_block, map_story_assets, story_asset_paths,
+)
 from zzz_story.speakers import (
     alias_from_source,
     canonical_text_id,
@@ -7,6 +9,10 @@ from zzz_story.speakers import (
 )
 
 import struct
+import json
+from types import SimpleNamespace
+
+import pytest
 import xxhash
 
 from zzz_story.perform import (
@@ -84,6 +90,77 @@ def test_catalog_mapping():
     assert matched == 1
     assert 12345 in by_block
     assert path in by_block[12345]
+
+
+def _unity_index_fixture():
+    path = "Data/ScriptConfig/Perform/Data/GalGame/Chapter240/test.asset"
+    asset_hash = xxhash.xxh64(("assets/napresources/" + path).lower().encode()).intdigest()
+    raw = bytearray(b"\x03\x00\x00\x00Res\x00")
+    raw.extend(struct.pack("<I", 1))
+    raw.extend(struct.pack("<IQ", 1, asset_hash))
+    raw.extend(struct.pack("<I", 2))
+    # The selected bundle is second, and points to the second block. Nonzero
+    # metadata catches reuse of the old stride and block-id offset.
+    raw.extend(struct.pack("<IQQ6I", 0, 11, 22, 33, 3, 3, 2, 2, 44))
+    raw.extend(struct.pack("<IQQ6I", 1, 55, 66, 77, 3, 3, 2, 2, 88))
+    raw.extend(struct.pack("<I", 2))
+    raw.extend(struct.pack("<IIB", 12345, 0, 3))
+    raw.extend(struct.pack("<IIB", 67890, 0, 3))
+    return bytes(raw), path, asset_hash
+
+
+def test_unity_index_maps_assets_and_blocks():
+    raw, path, asset_hash = _unity_index_fixture()
+    catalog = Catalog.from_unity_index(raw)
+    assert (catalog.asset_count, catalog.bundle_count, catalog.block_count) == (1, 2, 2)
+    assert map_story_assets(catalog, {path}) == ({67890: {path}}, 1)
+    assert catalog.block_for_asset_hash({asset_hash}) == ({67890}, 1)
+
+
+@pytest.mark.parametrize("length", [0, 11, 20, 28, 90, 120, 137])
+def test_unity_index_rejects_truncated_tables(length):
+    raw, _, _ = _unity_index_fixture()
+    with pytest.raises(ValueError):
+        Catalog.from_unity_index(raw[:length])
+
+
+def test_catalog_reads_index_object_from_mhy_container(tmp_path, monkeypatch):
+    raw, path, _ = _unity_index_fixture()
+    container = tmp_path / "index.blk"
+    container.write_bytes(b"mhy1")
+    monkeypatch.setattr("zzz_story.catalog.extract_mhy_files", lambda data: [b"cab"])
+    obj = SimpleNamespace(class_id=6776977, get_raw_data=lambda: raw)
+    monkeypatch.setattr("UnityPy.load", lambda data: SimpleNamespace(objects=[obj]))
+    assert map_story_assets(Catalog.from_path(container), {path}) == ({67890: {path}}, 1)
+
+
+def test_catalog_and_resources_prefer_persistent_updates(tmp_path):
+    root = tmp_path / "ZenlessZoneZero_Data"
+    base = root / "StreamingAssets/Blocks"
+    patch = root / "Persistent/Blocks"
+    for directory in (base, patch):
+        directory.mkdir(parents=True)
+        (directory / "1.blk").write_bytes(b"mhy1")
+        (directory / "2.blk").write_bytes(b"mhy1")
+    (base / "3.blk").write_bytes(b"base only")
+    for path in (root / "StreamingAssets/res_version", root / "Persistent/res_version_persist"):
+        path.write_text(json.dumps({"files": [
+            {"remoteName": "Blocks/2.blk", "tags": [1]},
+            {"remoteName": "Blocks/1.blk"},
+        ]}), encoding="utf-8")
+    assert find_catalog_block(tmp_path) == patch / "1.blk"
+    assert find_resource_block(tmp_path, 2) == patch / "2.blk"
+    assert find_resource_block(tmp_path, 3) == base / "3.blk"
+    assert find_resource_block(tmp_path, 4) is None
+
+
+def test_catalog_supports_legacy_gzip_without_manifest(tmp_path):
+    base = tmp_path / "ZenlessZoneZero_Data/StreamingAssets/Blocks"
+    base.mkdir(parents=True)
+    (base / "1.blk").write_bytes(b"\x1f\x8bsmall")
+    catalog = base / "2.blk"
+    catalog.write_bytes(b"\x1f\x8blargest")
+    assert find_catalog_block(tmp_path) == catalog
 
 
 def test_scan_cab_matches_individual_scanners():
