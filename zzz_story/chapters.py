@@ -11,7 +11,6 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 
-
 # Explicit order also acts as the tie-breaker for tokens that share a chapter.
 ORDERED_TOKENS: list[str] = [
     "000", "00",

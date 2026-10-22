@@ -1,6 +1,11 @@
 from zzz_story.content_audit import audit
 from zzz_story.extract import _write_csv
-from zzz_story.writers import write_chapter_files, write_jsonl, write_story_txt, write_supplement_txt
+from zzz_story.writers import (
+    write_chapter_files,
+    write_jsonl,
+    write_story_txt,
+    write_supplement_txt,
+)
 
 
 def fixture(output):

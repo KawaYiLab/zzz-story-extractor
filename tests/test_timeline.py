@@ -1,16 +1,21 @@
-import struct
 import csv
 import json
+import struct
 from types import SimpleNamespace
 
 import pytest
 
-from zzz_story.extract import _filter_timeline_copies, _write_csv
-from zzz_story.extract import extract
+from zzz_story.extract import _filter_timeline_copies, _write_csv, extract
 from zzz_story.fetch import REQUIRED_FILES
 from zzz_story.speakers import SpeakerIndex, SpeakerInfo, SpeakerStats
 from zzz_story.textmap import TextMap
-from zzz_story.timeline import TimelineClip, clip_from_raw, clips_from_cab, link_main_copies, timeline_asset_paths
+from zzz_story.timeline import (
+    TimelineClip,
+    clip_from_raw,
+    clips_from_cab,
+    link_main_copies,
+    timeline_asset_paths,
+)
 
 
 def unity_string(value):
@@ -146,7 +151,9 @@ def test_extract_timeline_routes_with_full_audit_and_csv(tmp_path, monkeypatch):
         extract(out_dir=out, data_dir=data, game_dir=tmp_path / "nogame", formats="jsonl,txt,csv",
                 include_lore=False, include_supplement=False, accuracy_first=accurate)
         outputs.append(out)
-    read = lambda path: [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    def read(path):
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
     kept = read(outputs[0] / "story.jsonl")
     candidates = read(outputs[1] / "story.jsonl")
     discarded = read(outputs[0] / "discarded.jsonl")

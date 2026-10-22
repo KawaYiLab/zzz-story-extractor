@@ -10,9 +10,14 @@ import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from .validate import validate_output
 from .narrative import attribution_summary
-from .writers import write_chapter_files, write_story_txt, write_supplement_txt, _atomic_write_text
+from .validate import validate_output
+from .writers import (
+    _atomic_write_text,
+    write_chapter_files,
+    write_story_txt,
+    write_supplement_txt,
+)
 
 
 def read_rows(path: Path) -> list[dict]:

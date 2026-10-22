@@ -11,9 +11,15 @@ from pathlib import Path
 import requests
 
 from . import __version__
-from .catalog import Catalog, find_catalog_block, find_resource_block, map_story_assets, story_asset_paths
+from .catalog import (
+    Catalog,
+    find_catalog_block,
+    find_resource_block,
+    map_story_assets,
+    story_asset_paths,
+)
 from .diff import diff_outputs, format_diff
-from .extract import extract, _cache_root
+from .extract import _cache_root, extract
 from .fetch import (
     DEFAULT_VERSION,
     detect_game_dir,

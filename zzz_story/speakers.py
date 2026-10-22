@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .catalog import (
-    Catalog, find_catalog_block, find_resource_block, map_story_assets,
-    resource_block_dirs, story_asset_paths,
+    Catalog,
+    find_catalog_block,
+    find_resource_block,
+    map_story_assets,
+    resource_block_dirs,
+    story_asset_paths,
 )
-from .fetch import read_json, read_game_version, sha256_file
+from .fetch import read_game_version, read_json, sha256_file
 from .perform import scan_perform_blocks
 from .perform_graph import configured_routes, graph_links, link_unused_copies
 from .textmap import load_language_map

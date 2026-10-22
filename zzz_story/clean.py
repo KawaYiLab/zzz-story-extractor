@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-
 _TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
 _LAYOUT_RE = re.compile(r"\{LAYOUT_([A-Z_]+)#([^{}]*)\}")
 

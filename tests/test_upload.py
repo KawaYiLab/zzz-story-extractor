@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 
 from zzz_story.cli import main
-from zzz_story.upload import BUNDLE_FORMAT, UploadError, build_bundle, encode_bundle, upload
+from zzz_story.upload import (
+    BUNDLE_FORMAT,
+    UploadError,
+    build_bundle,
+    encode_bundle,
+    upload,
+)
 
 
 def make_output(root: Path) -> Path:

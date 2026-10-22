@@ -1,25 +1,28 @@
+import json
+import struct
+from types import SimpleNamespace
+
+import pytest
+import xxhash
+
 from zzz_story.catalog import (
-    Catalog, find_catalog_block, find_resource_block, map_story_assets, story_asset_paths,
+    Catalog,
+    find_catalog_block,
+    find_resource_block,
+    map_story_assets,
+    story_asset_paths,
+)
+from zzz_story.perform import (
+    avatar_links_from_cab,
+    dialogue_links_from_cab,
+    option_keys_from_cab,
+    scan_cab,
 )
 from zzz_story.speakers import (
     alias_from_source,
     canonical_text_id,
     normalize_name,
     resolve_alias,
-)
-
-import struct
-import json
-from types import SimpleNamespace
-
-import pytest
-import xxhash
-
-from zzz_story.perform import (
-    avatar_links_from_cab,
-    dialogue_links_from_cab,
-    option_keys_from_cab,
-    scan_cab,
 )
 
 

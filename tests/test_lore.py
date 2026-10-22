@@ -1,9 +1,8 @@
 import json
-from pathlib import Path
 
 from zzz_story.lore import extract_lore
+from zzz_story.speakers import SpeakerIndex, SpeakerInfo, SpeakerStats
 from zzz_story.textmap import TextMap
-from zzz_story.speakers import SpeakerInfo, SpeakerIndex, SpeakerStats
 
 
 def test_lore_dialogue_names_event_boundaries_routes_and_source_audit(tmp_path):

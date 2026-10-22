@@ -7,7 +7,6 @@ from zzz_story.speakers import SpeakerIndex, SpeakerInfo, SpeakerStats
 from zzz_story.validate import validate_records
 from zzz_story.writers import write_story_txt
 
-
 KEY = "Main_GalGame_Chapter240_124000034_001"
 TEXT = "过渡到蕾米埃尔回忆之前和艾尔妲在在零号空洞前的对话。"
 

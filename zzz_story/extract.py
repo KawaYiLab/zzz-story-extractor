@@ -16,7 +16,6 @@ from .chapters import (
     chapter_info,
     parse_season_chapter,
     season_chapter_token,
-    sort_key as chapter_sort_key,
 )
 from .clean import clean_text
 from .fetch import (
@@ -31,7 +30,12 @@ from .fetch import (
 )
 from .keys import ParsedKey, natural_scene_key, parse_key
 from .lore import extract_lore
-from .narrative import annotate_attribution, annotate_content, annotate_local_order, attribution_summary
+from .narrative import (
+    annotate_attribution,
+    annotate_content,
+    annotate_local_order,
+    attribution_summary,
+)
 from .speakers import _MANUAL_ALIASES, SpeakerInfo, build_speaker_index, normalize_name
 from .textmap import TextMap, load_text_map
 from .validate import validate_records
@@ -427,7 +431,6 @@ def extract(
     names_global: dict[tuple[str, str], list[str]] = {}
     pending: list[dict] = []
     supplement: list[dict] = []
-    selected_keys: list[str] = []
     early_discarded: list[dict] = []
     name_candidates: list[dict] = []
     # TextMap contains many repeated values (especially short pauses and
@@ -811,8 +814,8 @@ def extract(
         if id(record) not in kept_objects and record.get("_discard_reason")
     ]
     for record in records + supplement:
-        for field in ("_discard_reason", "_paired_source_key", "_discard_similarity"):
-            record.pop(field, None)
+        for field_name in ("_discard_reason", "_paired_source_key", "_discard_similarity"):
+            record.pop(field_name, None)
     quality = _quality_metrics(records, supplement)
     discarded_names = sum(row.get("record_kind") == "name" for row in discarded)
 

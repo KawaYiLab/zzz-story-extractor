@@ -1,8 +1,7 @@
 """Keep attribution gaps and local ordering evidence separate from chronology."""
 
-from collections import Counter
 import hashlib
-
+from collections import Counter
 
 # Reviewed source values, not keyword heuristics. A changed text must be
 # reviewed again; an ordinary line mentioning Anby or "the protagonist" is

@@ -218,6 +218,7 @@ def ensure_data(
     # A failed refresh preserves the old cache. Hash verification detects an
     # interrupted replacement instead of labeling mixed files as one version.
     import tempfile
+
     from .writers import write_json
     target.parent.mkdir(parents=True, exist_ok=True)
     commit, version = _upstream_snapshot()

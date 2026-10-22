@@ -8,7 +8,7 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from .catalog import map_story_assets, find_resource_block
+from .catalog import find_resource_block, map_story_assets
 from .clean import clean_text
 from .mhy1 import extract_mhy_files
 from .perform import utf16_ascii_strings

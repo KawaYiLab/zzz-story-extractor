@@ -112,8 +112,8 @@ def test_review_speaker_fingerprint_tracks_changed_inputs(tmp_path):
 
 
 def test_review_coverage_counts_only_retained_voiced_lines(tmp_path, monkeypatch):
-    from zzz_story.fetch import REQUIRED_FILES
     from zzz_story.extract import extract
+    from zzz_story.fetch import REQUIRED_FILES
     from zzz_story.speakers import SpeakerIndex, SpeakerInfo
     data = tmp_path / "data"
     text_map = {"Main_GalGame_Chapter00_1_001":"相同台词", "Main_GalGame_Chapter00_1_002":"相同台词"}

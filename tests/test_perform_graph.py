@@ -4,9 +4,27 @@ from types import SimpleNamespace
 
 import pytest
 
-from zzz_story.extract import _collapse_gender_pairs, _filter_branch_lines, _filter_perform_routes, _write_csv
-from zzz_story.odin import Entry, Node, OdinError, Reference, perform_entries, read_entries
-from zzz_story.perform_graph import asset_hash, graph_from_raw, graph_links, graphs_from_cab, link_unused_copies
+from zzz_story.extract import (
+    _collapse_gender_pairs,
+    _filter_branch_lines,
+    _filter_perform_routes,
+    _write_csv,
+)
+from zzz_story.odin import (
+    Entry,
+    Node,
+    OdinError,
+    Reference,
+    perform_entries,
+    read_entries,
+)
+from zzz_story.perform_graph import (
+    asset_hash,
+    graph_from_raw,
+    graph_links,
+    graphs_from_cab,
+    link_unused_copies,
+)
 from zzz_story.textmap import TextMap
 
 

@@ -1,12 +1,13 @@
+import struct
+
+from test_perform_graph import encode_node, list_node, node
+
 from zzz_story.extract import NAME_IGNORE, _line_sort_key, _mark_unattributed_scenes
 from zzz_story.narrative import annotate_attribution, annotate_local_order
+from zzz_story.odin import Entry
 from zzz_story.perform_graph import configured_routes, graph_from_raw, graph_links
 from zzz_story.speakers import SpeakerInfo, alias_from_source, structured_speaker
 from zzz_story.textmap import TextMap
-
-from test_perform_graph import encode_node, list_node, node
-from zzz_story.odin import Entry
-import struct
 
 
 def raw_sections(sections):
