@@ -4,6 +4,23 @@
 
 当前工具版本为 **0.3.0**，已验证游戏数据版本为 **3.3.0（CHS）**。输出按章节、内容类型和场景整理；**跨场景播放顺序尚未还原**，不能直接将目录顺序当作剧情时间线。
 
+## 剧情库 MCP
+
+绳网剧情库 MCP 地址：[https://ik.tiwat.cn/v1/story/mcp](https://ik.tiwat.cn/v1/story/mcp)。支持 Streamable HTTP，可在兼容的 MCP 客户端中配置：
+
+```json
+{
+  "mcpServers": {
+    "InterKnotStory": {
+      "type": "streamable-http",
+      "url": "https://ik.tiwat.cn/v1/story/mcp"
+    }
+  }
+}
+```
+
+仓库已提供相同的 [MCP 配置](.mcp.json)。
+
 ## 快速开始
 
 需要 Windows 和 Python 3.11+（本仓库使用 Python 3.12 验证）。解析演出资源与配音说话人还需要本机安装游戏；仅提取文本可使用 `--no-speakers`。
