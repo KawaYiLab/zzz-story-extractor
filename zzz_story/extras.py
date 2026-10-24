@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from .chapters import chapter_info
 from .clean import clean_text
 from .content import DOMAIN_LABELS, EXTRA_DOMAINS, ContentKey, classify_key
+from .event_names import EventName, infer_event_names
 from .keys import natural_scene_key
 
 # Within a group, keep families in the mainline reading order.
@@ -33,6 +34,8 @@ _FAMILY_ORDER = {
     "Bubble": 5,
     "AutoEvent": 6,
 }
+# Domains whose source tags name an event; others keep their tag or chapter.
+NAMED_DOMAINS = ("activity", "side")
 # Groups are numbered inside each domain; this keeps domains apart and away
 # from mainline chapter orders when the server sorts groups.
 DOMAIN_ORDER_BASE = 1_000_000
@@ -50,6 +53,8 @@ class ExtraStats:
     speaker_lines: int = 0
     gender_copies: int = 0
     adjacent_duplicates: int = 0
+    named_groups: int = 0
+    group_names: dict[str, dict] = field(default_factory=dict)
     by_domain: dict[str, int] = field(default_factory=dict)
     groups: dict[str, int] = field(default_factory=dict)
 
@@ -73,9 +78,11 @@ def _male_twin(key: str, text_map) -> str | None:
     return None
 
 
-def group_label(domain: str, tag: str) -> str:
-    """Readable group label; chapter-bound side tables reuse chapter labels."""
+def group_label(domain: str, tag: str, name: EventName | None = None) -> str:
+    """Readable group label: inferred event name, chapter label, else the tag."""
     prefix = DOMAIN_LABELS.get(domain, domain)
+    if name is not None:
+        return f"{prefix} · {name.name}"
     match = re.fullmatch(r"Chapter(\d+)", tag)
     if match:
         info = chapter_info(tag)
@@ -129,6 +136,25 @@ def extract_extras(
                 continue
         pending.append((parsed, text, raw, variants))
 
+    # Infer per domain so tags are matched bare (``ZenkovS1``, not ``side.ZenkovS1``).
+    sources: dict[str, dict[str, dict]] = {}
+    for parsed, text, _raw, _variants in pending:
+        if parsed.domain in NAMED_DOMAINS:
+            tag = parsed.group.split(".", 1)[1]
+            group = sources.setdefault(parsed.domain, {}).setdefault(tag, {"scenes": set(), "text": []})
+            group["scenes"].add(parsed.scene)
+            group["text"].append(text)
+    event_names: dict[str, EventName] = {}
+    for domain, groups in sources.items():
+        joined = {tag: {"scenes": row["scenes"], "text": "\n".join(row["text"])} for tag, row in groups.items()}
+        for tag, name in infer_event_names(text_map, joined, quest_names).items():
+            event_names[f"{domain}.{tag}"] = name
+    stats.named_groups = len(event_names)
+    stats.group_names = {
+        group: {"name": name.name, "source": name.source, "evidence": name.evidence}
+        for group, name in sorted(event_names.items())
+    }
+
     pending.sort(
         key=lambda item: (
             EXTRA_DOMAINS.index(item[0].domain),
@@ -176,7 +202,8 @@ def extract_extras(
             "line_id": "EX_" + parsed.key,
             "domain": parsed.domain,
             "chapter": parsed.group,
-            "chapter_label": group_label(parsed.domain, tag),
+            "chapter_label": group_label(parsed.domain, tag, event_names.get(parsed.group)),
+            "group_name_source": event_names[parsed.group].source if parsed.group in event_names else None,
             "chapter_order": group_orders[parsed.group],
             "scene": parsed.scene,
             "scene_title": None,

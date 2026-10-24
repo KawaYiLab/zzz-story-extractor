@@ -110,12 +110,14 @@
 | --- | --- |
 | `activity` 活动剧情 | `Activity_<类型>_<活动>_…`、`ActivityChat_*`、`ActivityBubble_*`、`GalGame_<活动>_…`、`TL_Activity*` |
 | `side` 支线委托 | `Side_<类型>_<支线>_…`、`SideChat_*`、`SideBubble_*`、`PhotoSideChat_*` |
-| `companion` 代理人故事 | `Companion_<类型>_<代理人>_…`、`CompanionChat_*`、`GalGame_Chapter<代理人>_…`、`PartnerDate_*` |
+| `companion` 代理人故事 | `Companion_<类型>_<代理人>_…`、`CompanionChat_*`、`GalGame_Chapter<代理人>_…` |
 | `hollow` 空洞事件 | `AutoEvent<事件>_<行>`、`InLevel_<类型>_…` |
-| `other` 其他剧情 | `Other_*`、`Store_*`、`StoreChat_*`、`Enclave*` |
+| `other` 其他剧情 | `Other_*`、`Store_*`、`Enclave*` |
 | `legacy` 旧版文本 | `Galgame_*`（小写 g）、`Chat_Chapter*`；未确认是否仍在游戏中出现 |
 
-- `chapter` 是来源分组 `<domain>.<标签>`，如 `activity.SayItWithFlowers`；`chapter_label` 为 `活动剧情 · SayItWithFlowers`，绑定主线章节的支线表复用章节名。`chapter_order` 从 1,000,000 起按域分段，排在主线之后。
+- `chapter` 是来源分组 `<domain>.<标签>`，如 `activity.SayItWithFlowers`，不随命名变化。`chapter_label` 优先使用推断出的中文活动名（`活动剧情 · 花语未明之言`），绑定主线章节的支线表复用章节名，其余保留内部标签。
+- 活动与支线的中文名由 `zzz_story/event_names.py` 推断，只采用与游戏内活动标题字符串一致的证据，按强弱依次为：同名标题键 `ActivityMainTitle_<标签>`（`title`）、`<标签>_ActivityTitle`（`tagged`）、跳转文案“推进「X」剧情”（`jump`）、本组场景任务名的共同前缀（`quest`，至少两个场景）、本组正文明显多于其他组的标题引用（`mention`）。采用的层级写入 `group_name_source`，依据键汇总在 `coverage.json` 的 `extra.group_names`。两组推断出同名时，名称后附内部标签。
+- 代理人邀约（`PartnerDate_*`）、商店与街区 NPC（`StoreChat_*`、`StoreBubble_*` 等）由 `lore/` 提取，登记表直接引用其前缀常量，不重复写入 `extra.jsonl`。`chapter_order` 从 1,000,000 起按域分段，排在主线之后。
 - `line_id` 为 `EX_<source_key>`，新增条目不会重编号。组内按类型、场景号、行号排列，`chronology_status=unknown`、`context_status=source_key_only`。
 - `speaker` 来自共享的演出/配音索引（需本机游戏），或空洞事件正文中的 `名字：「…」`（`speaker_source=inline`）；其余保持为空，`line_type=unknown`。`_Name` 键只写入 `scene_speakers`。
 - 默认模式丢弃有男主原键的 `…F` 女主副本和同场景相邻同文，写入 `extra-discarded.jsonl`；完整性模式全部保留。

@@ -26,6 +26,9 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from .partner_dialogue import PARTNER_DIALOGUE_PREFIXES
+from .street_dialogue import STREET_DIALOGUE_PREFIXES
+
 # Order is also the catalog order of the extra domains.
 DOMAIN_LABELS: dict[str, str] = {
     "activity": "活动剧情",
@@ -54,7 +57,6 @@ CATEGORY_DOMAINS: dict[str, str] = {
     "Activity": "activity",
     "Side": "side",
     "Companion": "companion",
-    "PartnerDate": "companion",
     "InLevel": "hollow",
     "Other": "other",
     "Store": "other",
@@ -96,6 +98,9 @@ _PREFIX_CHAT_DOMAINS = {
 # Timeline subtitles: ``TL_C30_ChatPlus`` belongs to the mainline timeline
 # reader (timeline.py); ``TL_Activity*`` and ``TL_PartnerDate`` do not.
 _TIMELINE_RE = re.compile(r"^TL_(?P<tag>[^_]+)_(?P<kind>[A-Za-z]+)_(?P<scene>\d+)_(?P<suffix>.+)$")
+# Families lore.py extracts (partner talks and dates, street and store NPCs).
+# Checked before every other rule so no key is written to two outputs.
+LORE_PREFIXES = PARTNER_DIALOGUE_PREFIXES + STREET_DIALOGUE_PREFIXES
 # Families another output already covers, so the report does not flag them.
 _COVERED_PREFIXES = {
     "CS_": "supplement",
@@ -164,6 +169,8 @@ def _kind(raw: str) -> str | None:
 
 def classify_key(key: str) -> ContentKey | None:
     """Classify one TextMap key, or ``None`` when it is not narrative text."""
+    if key.startswith(LORE_PREFIXES):
+        return ContentKey(key, "lore", "Lore", "", "", "other")
     if key.startswith(("Main_", "MainChat_")):
         return ContentKey(key, "main", "Main", "", "", "other")
 

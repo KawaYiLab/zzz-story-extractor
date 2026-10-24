@@ -147,7 +147,7 @@ python -m venv .venv
 ## 范围与已知限制
 
 - 主线正文覆盖 `Main_GalGame`、`Main_Chat`、`Main_BubbleStory`、`Main_Bubble`、`Main_Ongoing*`、`Main_ChatAudio`、`Main_ChatPlus`、`MainChat_Chapter*`，以及第一季过场演出的旧式键 `GalGame_Chapter<数字>_*`。
-- 活动、支线、代理人故事、空洞事件写入 `extra.jsonl`（见[数据格式说明](docs/data-format.md#活动支线与代理人故事)），按来源表分组，没有任务或播放顺序关联；未接入游戏资源时大多没有逐句说话人。设定及代理人互动单独写入 `lore/`。
+- 活动、支线、代理人故事、空洞事件写入 `extra.jsonl`（见[数据格式说明](docs/data-format.md#活动支线与代理人故事)），按来源表分组，活动与支线按游戏内标题推断中文名（查不到时保留内部标签），没有任务或播放顺序关联；未接入游戏资源时大多没有逐句说话人。设定及代理人互动单独写入 `lore/`。
 - 键族归属由 `zzz_story/content.py` 统一登记；`content-coverage.json` 和 `coverage` 命令列出未登记的对白类键族，版本更新后先检查一次。
 - 默认偏向男主视角，有明确证据的分支或副本移入删减审计；无法确认的重复与 NPC 台词继续保留。需要双方候选时使用 `--accuracy-first`。
 - 原显示名优先于配音别名，隐藏身份不被提前揭示；无法可靠关联的角色保留为空。`line_type=unknown` 不等于“有配音但别名缺失”，覆盖率仅对关联配音的保留行计算。
