@@ -59,7 +59,7 @@ def export_errors(output: Path, story: list[dict], supplement: list[dict]) -> li
                     errors.append(f"CSV {field} differs: {expected['source_key']}")
             if actual.get("scene_speakers", "") != "、".join(expected.get("scene_speakers") or []):
                 errors.append(f"CSV scene_speakers differs: {expected['source_key']}")
-            for field in ("perform", "timeline", "text_variants", "source_attribution", "content_evidence"):
+            for field in ("perform", "timeline", "text_variants", "source_attribution", "content_evidence", "source_variants"):
                 value = actual.get(field, "")
                 try:
                     decoded = json.loads(value) if value else None
@@ -116,6 +116,10 @@ def audit(output: Path, *, baseline: Path | None = None, cache: Path | None = No
     lore_retained = [row for row in lore_dialogues if row["retained"]]
     lore_pairs = [{"source_keys": [a["source_key"], b["source_key"]], "text": b["text"]}
                   for a, b in zip(lore_retained, lore_retained[1:]) if a["text"] == b["text"]]
+    street_dialogues = read_rows(output / "lore/street/dialogue-audit.jsonl")
+    messages = read_rows(output / "lore/interknot/message-audit.jsonl")
+    source_variants = read_rows(output / "source-variants.jsonl")
+    source_gaps = read_rows(output / "source-gaps.jsonl")
     gaps = [{"chapter": group[0], "family": group[1], "scene": group[2], "lines": len(rows)}
             for group, rows in groups.items() if not any(r["speaker"] for r in rows)
             and any(r.get("speaker_status") == "unresolved" if "speaker_status" in r
@@ -164,12 +168,19 @@ def audit(output: Path, *, baseline: Path | None = None, cache: Path | None = No
                          "lore_adjacent_equal_lines": len(lore_repeats),
                          "lore_dialogue_candidates": len(lore_dialogues), "lore_dialogue_retained": len(lore_retained),
                          "lore_dialogue_equal_pairs": len(lore_pairs),
+                         "lore_unassigned_dialogues": sum(row.get("context_status") == "unresolved" for row in lore_dialogues),
+                         "street_dialogue_candidates": len(street_dialogues),
+                         "street_dialogue_retained": sum(row.get("retained", True) for row in street_dialogues),
+                         "message_candidates": len(messages),
+                         "message_sender_resolved": sum(bool(row.get("sender")) for row in messages),
+                         "source_variant_entries": len(source_variants), "source_gap_entries": len(source_gaps),
                          "structured_assets": len(inventory), "text_anomalies": len(anomalies), "export_errors": len(errors)},
             "reviewed_placeholders": [row for row in story if row.get("content_status") == "reviewed_placeholder"],
             "notes": ["相邻同文是待核对信号，不等同于提取错误；选项与回答、停顿和真实重复必须保留。",
                       "未引用文本可能来自旧版本、子剧情、外部时间轴或缺失资源；不能仅凭未引用删除。",
                       "本文核验目录结构、原文保存及本地资源证据，不声称已确认所有运行时播放路径。"],
             "attribution": attribution_summary(story),
+            "source_variants": source_variants, "source_gaps": source_gaps,
             "export_errors": errors, "repeated_pairs": repeats, "unattributed_scenes": gaps,
             "unreferenced_scene_candidates": unreferenced, "text_anomalies": anomalies, "changes": change,
             "supplement_repeated_pairs": supplement_repeats, "lore_repeated_lines": lore_repeats,

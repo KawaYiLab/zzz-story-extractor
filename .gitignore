@@ -1,5 +1,8 @@
 .venv/
 data/cache/
+data/completion-research/
+data/message-research/
+data/*-research.json
 out/
 .pytest_cache/
 .ruff_cache/

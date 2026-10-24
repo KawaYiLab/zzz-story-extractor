@@ -36,8 +36,16 @@ from .narrative import (
     annotate_local_order,
     attribution_summary,
 )
+from .partner_dialogue import PARTNER_DIALOGUE_PREFIXES
+from .source_audit import (
+    annotate_source_variants,
+    collect_empty_sources,
+    collect_source_variants,
+)
 from .speakers import _MANUAL_ALIASES, SpeakerInfo, build_speaker_index, normalize_name
-from .textmap import TextMap, load_text_map
+from .street_dialogue import STREET_DIALOGUE_PREFIXES
+from .supplement_context import annotate_supplement_context, scan_comic_context
+from .textmap import TextMap, load_language_map, load_text_map
 from .validate import validate_records
 from .writers import (
     write_chapter_files,
@@ -399,7 +407,8 @@ def extract(
     # Refuse reserved output paths before writing anything. Reusing a folder
     # can combine new manifests with stale JSONL, chapters or lore.
     reserved = ("story.jsonl", "story.txt", "story.csv", "supplement.jsonl", "supplement.txt",
-                "chapters", "lore", "discarded.jsonl", "name_candidates.jsonl", "speaker-gaps.jsonl", "placeholder-records.jsonl", "coverage.json", "manifest.json")
+                "chapters", "lore", "discarded.jsonl", "name_candidates.jsonl", "speaker-gaps.jsonl", "placeholder-records.jsonl",
+                "source-variants.jsonl", "source-gaps.jsonl", "supplement-context-report.json", "coverage.json", "manifest.json")
     if any((out_dir / name).exists() for name in reserved):
         raise FileExistsError(f"输出目录已有提取产物：{out_dir}；请指定新的 --out 目录")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -433,6 +442,7 @@ def extract(
     supplement: list[dict] = []
     early_discarded: list[dict] = []
     name_candidates: list[dict] = []
+    source_audit_keys: list[str] = []
     # TextMap contains many repeated values (especially short pauses and
     # common acknowledgements).  Cleaning markup is pure for a given raw
     # value/protagonist, so reuse the result within this extraction run.
@@ -467,6 +477,10 @@ def extract(
         if parsed.chapter_token in EXCLUDED_CHAPTERS:
             continue
         if parsed.family == "MainChat" and not parsed.chapter_token.startswith("Chapter"):
+            continue
+        if parsed.family in MAIN_FAMILIES or parsed.family == "MainChat":
+            source_audit_keys.append(key)
+        if parsed.kind == "source_variant":
             continue
         if parsed.family in MAIN_FAMILIES or parsed.family == "MainChat":
             if limit is not None and stats.line_keys >= limit:
@@ -558,6 +572,8 @@ def extract(
             stats.supplement_lines += 1
 
     print(f"  line keys: {stats.line_keys}, name keys: {stats.name_keys}, missing text: {stats.missing_text}")
+    source_variants = collect_source_variants(text_map, source_audit_keys)
+    source_gaps = collect_empty_sources(text_map, load_language_map(data_paths, "EN"), source_audit_keys)
     if only is not None and stats.line_keys == 0:
         raise SystemExit(
             f"no story lines matched --only-chapter {', '.join(sorted(only))}; "
@@ -566,7 +582,7 @@ def extract(
 
     text_keys = {record["_source_key"] for record in pending}
     if include_lore:
-        text_keys.update(key for key in text_map.keys() if key.startswith(("PartnerTalk_", "Chat_PartnerTalk_")))
+        text_keys.update(key for key in text_map.keys() if key.startswith(PARTNER_DIALOGUE_PREFIXES + STREET_DIALOGUE_PREFIXES))
     cache_root = _cache_root(data_dir, lang)
     speaker_index, speaker_stats = build_speaker_index(
         text_map=text_map,
@@ -578,6 +594,14 @@ def extract(
         no_speakers=no_speakers,
     )
     stats.speaker_stats = asdict(speaker_stats)
+    comic_context = {"links": {}, "errors": {}, "stats": {}}
+    if include_supplement and not no_speakers and any(row["family"] == "Comic" for row in supplement):
+        perform_path = data_paths.get("FileCfg/PerformTemplateTb.json")
+        if perform_path:
+            print("Finding comic scene and speaker references...")
+            comic_context = scan_comic_context(game_dir, read_json(perform_path),
+                                               cache_root / "comic_context_cache.json", refresh=refresh_speakers)
+    comic_stats = annotate_supplement_context(supplement, comic_context)
     alias_name_map = {} if accuracy_first else _infer_alias_names(pending, speaker_index, names_global)
 
     records: list[dict] = []
@@ -690,6 +714,7 @@ def extract(
     # shorter lists, but the original objects remain available for the audit
     # sidecar so no dropped line disappears without a reason.
     all_story_records = list(records)
+    annotate_source_variants(records, source_variants)
 
     _mark_unattributed_scenes(records)
     annotate_attribution(records)
@@ -844,6 +869,10 @@ def extract(
     write_jsonl(discarded, out_dir / "discarded.jsonl")
     write_jsonl((record for record in records if record.get("speaker_status") == "unresolved"), out_dir / "speaker-gaps.jsonl")
     write_jsonl((record for record in records if record.get("content_status") == "reviewed_placeholder"), out_dir / "placeholder-records.jsonl")
+    write_jsonl(source_variants, out_dir / "source-variants.jsonl")
+    write_jsonl(source_gaps, out_dir / "source-gaps.jsonl")
+    write_json(out_dir / "supplement-context-report.json", {"stats": {**comic_context["stats"], **comic_stats},
+                                                            "errors": comic_context["errors"]})
     if accuracy_first:
         write_jsonl(name_candidates, out_dir / "name_candidates.jsonl")
 
@@ -854,7 +883,8 @@ def extract(
         print("Extracting worldbuilding lore...")
         avatar_path = data_paths.get("FileCfg/AvatarBaseTemplateTb.json")
         avatar_base = read_json(avatar_path) if avatar_path and avatar_path.exists() else None
-        lore_stats = extract_lore(text_map, avatar_base, out_dir, speaker_index=speaker_index, accuracy_first=accuracy_first)
+        lore_stats = extract_lore(text_map, avatar_base, out_dir, speaker_index=speaker_index,
+                                  accuracy_first=accuracy_first, data_paths=data_paths)
         print(
             f"  lore extracted: {lore_stats.get('lore_agents', 0)} agents, "
             f"{lore_stats.get('lore_discs', 0)} discs, "
@@ -930,6 +960,9 @@ def extract(
         "speaker_stats": stats.speaker_stats,
         "attribution": attribution_summary(records),
         "reviewed_placeholder_lines": sum(record.get("content_status") == "reviewed_placeholder" for record in records),
+        "source_variant_entries": len(source_variants),
+        "source_gap_entries": len(source_gaps),
+        "supplement_context": {**comic_context["stats"], **comic_stats},
         "accuracy_first": accuracy_first,
         "ordering": {"mode": "catalog", "chronology_status": "unknown"},
         "quality": quality,
@@ -978,6 +1011,9 @@ def extract(
         "files": file_hashes,
         "attribution": attribution_summary(records),
         "reviewed_placeholder_lines": sum(record.get("content_status") == "reviewed_placeholder" for record in records),
+        "source_variant_entries": len(source_variants),
+        "source_gap_entries": len(source_gaps),
+        "supplement_context": {**comic_context["stats"], **comic_stats},
     }
 
     write_json(out_dir / "coverage.json", coverage)
@@ -1519,6 +1555,7 @@ def _write_csv(records: list[dict], path: Path) -> None:
         "source_attribution",
         "content_status",
         "content_evidence",
+        "source_variants",
         "speaker_status",
         "speaker_gap_reason",
         "speaker_slot",
@@ -1551,7 +1588,7 @@ def _write_csv(records: list[dict], path: Path) -> None:
             row["text_variants"] = json.dumps(row["text_variants"], ensure_ascii=False) if row["text_variants"] else ""
             row["timeline"] = json.dumps(row["timeline"], ensure_ascii=False) if row.get("timeline") else ""
             row["perform"] = json.dumps(row["perform"], ensure_ascii=False) if row.get("perform") else ""
-            for field in ("source_attribution", "content_evidence"):
+            for field in ("source_attribution", "content_evidence", "source_variants"):
                 row[field] = json.dumps(row[field], ensure_ascii=False) if row.get(field) else ""
             row["scene_speakers"] = "、".join(row["scene_speakers"])
             writer.writerow(row)

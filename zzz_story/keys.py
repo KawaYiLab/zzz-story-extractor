@@ -12,7 +12,7 @@ class ParsedKey:
     family: str
     chapter_token: str
     scene: str
-    kind: str  # line | name | other
+    kind: str  # line | name | source_variant | other
     line_no: int | None = None
     sub_no: int | None = None
     variant: str | None = None
@@ -43,6 +43,13 @@ def _parse_suffix(suffix: str) -> tuple[str, int | None, int | None, str | None]
     match = _OPTION_RE.match(suffix)
     if match:
         return ("line", int(match.group(2)), int(match.group(1)), match.group(3))
+    # This is an auxiliary source value, not a second playback event. Keep
+    # its identity separate so it can be audited without renumbering _01.
+    if suffix.endswith("_Gender"):
+        match = _LINE_RE.fullmatch(suffix[:-len("_Gender")])
+        if match:
+            return ("source_variant", int(match.group(1)),
+                    int(match.group(2)) if match.group(2) else None, "Gender")
     return ("other", None, None, None)
 
 

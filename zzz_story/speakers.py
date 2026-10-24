@@ -17,9 +17,12 @@ from .catalog import (
     resource_block_dirs,
     story_asset_paths,
 )
+from .clean import clean_text
 from .fetch import read_game_version, read_json, sha256_file
+from .partner_dialogue import PARTNER_DIALOGUE_PREFIXES
 from .perform import scan_perform_blocks
 from .perform_graph import configured_routes, graph_links, link_unused_copies
+from .street_dialogue import STREET_DIALOGUE_PREFIXES
 from .textmap import load_language_map
 from .timeline import VOICE_RE, link_main_copies, scan_timeline_clips
 
@@ -324,20 +327,24 @@ def ongoing_tips_speakers(
     covers lines the Perform block scan cannot reach.
     """
     path = data_paths.get("FileCfg/OngoingTipsConfigTemplateTb.json")
-    out: dict[str, tuple[str, str | None]] = {}
+    candidates: dict[str, set[tuple[str, str | None]]] = {}
     if not path or not path.exists():
-        return out
+        return {}
     payload = read_json(path)
     rows = payload.get("IAEFFFFLKNB", []) if isinstance(payload, dict) else []
     for row in rows:
         if not isinstance(row, dict):
             continue
         text_key = row.get("FGAHJLHNEDB")
-        if not isinstance(text_key, str) or not text_key.startswith(("Main_", "MainChat_")):
+        if not isinstance(text_key, str):
+            continue
+        # TextMap membership avoids assigning a missing source. Support the
+        # old test map protocol as well as the normal TextMap dictionary.
+        if hasattr(text_map, "__contains__") and text_key not in text_map:
             continue
         name = text_map.get(str(row.get("BLOGJEGIBOH") or ""))
         if name and name not in _GENERIC_NAMES and name not in _TIPS_NAME_IGNORE:
-            out[text_key] = (name, None)
+            candidates.setdefault(text_key, set()).add((name, None))
             continue
         primary, secondary = (
             ("CIBKAFBOGCI", "PFOBGIIIICG") if protagonist == "M" else ("PFOBGIIIICG", "CIBKAFBOGCI")
@@ -347,8 +354,80 @@ def ongoing_tips_speakers(
         alias = match.group(1) if match else None
         speaker = resolve_alias(alias, alias_map) if alias else None
         if speaker:
-            out[text_key] = (speaker, alias)
+            candidates.setdefault(text_key, set()).add((speaker, alias))
+    out = {}
+    for text_key, choices in candidates.items():
+        names = {name for name, _ in choices}
+        if len(names) != 1:
+            continue
+        aliases = {alias for _, alias in choices if alias}
+        out[text_key] = (next(iter(names)), next(iter(aliases)) if len(aliases) == 1 else None)
     return out
+
+
+def ongoing_voice_names(data_paths: dict[str, Path], text_map, protagonist: str = "M") -> dict[str, list[dict]]:
+    """Keep display-name evidence scoped to a complete configured voice key.
+
+    One actor alias may have multiple displayed identities. Names must never
+    propagate by the alias alone, and a conflicting exact key stays unknown.
+    """
+    path = data_paths.get("FileCfg/OngoingTipsConfigTemplateTb.json")
+    if not path or not path.exists():
+        return {}
+    payload = read_json(path)
+    rows = payload.get("IAEFFFFLKNB", []) if isinstance(payload, dict) else []
+    candidates = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        text_key, name_key = row.get("FGAHJLHNEDB"), row.get("BLOGJEGIBOH")
+        if not isinstance(text_key, str) or not isinstance(name_key, str):
+            continue
+        if hasattr(text_map, "__contains__") and text_key not in text_map:
+            continue
+        name = text_map.get(name_key)
+        if not name or name in _GENERIC_NAMES or name in _TIPS_NAME_IGNORE:
+            continue
+        # Preserve the displayed identity for the selected protagonist route.
+        name = clean_text(name, protagonist).text
+        fields = ("CIBKAFBOGCI", "PFOBGIIIICG") if protagonist == "M" else ("PFOBGIIIICG", "CIBKAFBOGCI")
+        voice = next((row.get(field) for field in fields if row.get(field)), None)
+        if not isinstance(voice, str) or not voice or voice.startswith(("Play_", "Stop_")):
+            continue
+        candidates.setdefault(voice, []).append({"source": "FileCfg/OngoingTipsConfigTemplateTb.json",
+                                                "source_key": text_key, "name_key": name_key, "name": name,
+                                                "row_id": row.get("IDGNMKGGEGK")})
+    return {voice: evidence for voice, evidence in candidates.items()
+            if len({item["name"] for item in evidence}) == 1}
+
+
+def resolve_ongoing_voice_names(speakers: dict[str, SpeakerInfo], evidence: dict[str, list[dict]], text_map) -> int:
+    count = 0
+    for key, info in speakers.items():
+        link = info.perform or {}
+        if info.speaker or link.get("avatars") or link.get("is_narration") or link.get("is_option"):
+            continue
+        voices = link.get("voice_keys") or []
+        # Every reference needs the same exact voice key/name evidence. Partial
+        # or mixed references must not acquire a name from one occurrence.
+        occurrences = link.get("occurrences") or []
+        if not voices or any(voice not in evidence for voice in voices):
+            continue
+        if not occurrences or any(not item.get("voice_keys") or item.get("is_narration")
+                                  or item.get("is_option") for item in occurrences):
+            continue
+        values = [item for voice in voices for item in evidence[voice]]
+        names = {item["name"] for item in values}
+        if len(names) != 1:
+            continue
+        info.speaker = next(iter(names))
+        info.confidence, info.source = 0.95, "tips"
+        link["speaker_evidence"] = {
+            "kind": "exact_configured_voice", "voice_keys": voices, "references": values,
+            "text_difference": any(text_map.get(item["source_key"]) != text_map.get(key) for item in values),
+        }
+        count += 1
+    return count
 
 
 def build_speaker_index(
@@ -391,15 +470,21 @@ def build_speaker_index(
     # Ongoing tips cover in-level barks the Perform blocks cannot reach.
     for text_id, (name, alias) in tips.items():
         info = speakers.get(text_id)
-        if info is None or not info.speaker:
+        link = info.perform or {} if info else {}
+        if info is None or (not info.speaker and not link.get("avatars")
+                            and not link.get("is_narration") and not link.get("is_option")):
             speakers[text_id] = SpeakerInfo(
                 name,
                 alias or (info.alias if info else None),
                 0.9,
                 "tips",
                 bool(info and info.has_voice),
+                info.timeline if info else None,
+                info.perform if info else None,
             )
             stats.tips_speakers += 1
+    stats.tips_speakers += resolve_ongoing_voice_names(
+        speakers, ongoing_voice_names(data_paths, text_map, "M"), text_map)
     _recount_speaker_gaps(speakers, stats)
     return _index_from_speakers(speakers, text_keys, stats, option_keys), stats
 
@@ -436,7 +521,8 @@ def _speaker_fingerprint(text_map, alias_map: dict[str, str], perform_path: Path
         "textmap": sorted(text_map.items()),
         "aliases": sorted(alias_map.items()),
         "resolver": {name: sha256_file(Path(__file__).with_name(name))
-                     for name in ("speakers.py", "perform.py", "catalog.py", "mhy1.py", "timeline.py", "odin.py", "perform_graph.py")},
+                     for name in ("speakers.py", "perform.py", "catalog.py", "mhy1.py", "timeline.py", "odin.py",
+                                  "perform_graph.py", "partner_dialogue.py", "street_dialogue.py")},
         "game": str(game_dir.resolve()),
         "game_version": read_game_version(game_dir),
         "blocks": inventory,
@@ -501,11 +587,12 @@ def _perform_speakers(
         print("warning: no Perform blocks found; continuing without per-line speakers")
         return {}, set()
 
-    # Keep all GalGame assets for agent lore; other families are structured
-    # only for main-story assets. Event/partner Chat is outside this parser's
-    # scope and includes layouts not used by the main story.
+    # Agent interactions and street dialogue share the same typed node reader.
+    # Only configured assets are selected; unrelated event/side assets remain
+    # outside the exported scope unless they were already GalGame sources.
     routes = {path: sides for path, sides in configured_routes(perform_payload).items()
-              if "/Data/GalGame/" in path or Path(path).stem.startswith(("Main_", "MainChat_"))}
+              if "/Data/GalGame/" in path or Path(path).stem.startswith(
+                  ("Main_", "MainChat_") + PARTNER_DIALOGUE_PREFIXES + STREET_DIALOGUE_PREFIXES)}
     source_to_text, avatar_to_text, option_keys, scan_stats = scan_perform_blocks(block_paths, set(routes))
     stats.links = scan_stats.links
     stats.sources = scan_stats.sources
@@ -612,7 +699,8 @@ def _perform_speakers(
         "speakers": {key: asdict(value) for key, value in speakers.items()},
         "options": sorted(option_keys),
         "stats": asdict(stats),
-        "perform_inventory": {path: {"name": graph.name, "keys": sorted(graph.keys), "gender_conditions": graph.conditions}
+        "perform_inventory": {path: {"name": graph.name, "keys": sorted(graph.keys), "gender_conditions": graph.conditions,
+                                     "status": graph.status, "null_nodes": graph.null_nodes}
                               for path, graph in scan_stats.graphs.items()},
         "perform_graph_errors": scan_stats.graph_errors,
     }

@@ -61,6 +61,13 @@ def check(output: Path, audit: Path) -> dict:
         require(raw_text(row) == raw_text(names[key]) and bool(row.get("reason")), f"姓名原文/原因无效：{key}")
     require(not rows(audit / "discarded.jsonl"), "完整性模式不应删减")
     result = {"candidates": len(candidates), "retained": len(retained), "removed_lines": len(removed_lines), "removed_names": len(removed) - len(removed_lines)}
+    for filename, label in (("source-variants.jsonl", "source_variants"), ("source-gaps.jsonl", "source_gaps")):
+        default_sources = rows(output / filename, optional=True)
+        audit_sources = rows(audit / filename, optional=True)
+        require(default_sources == audit_sources, f"来源审计两种模式不一致：{filename}")
+        keys = [row["source_key"] for row in default_sources]
+        require(len(keys) == len(set(keys)), f"来源审计重复：{filename}")
+        result[label] = len(keys)
     lore_rel = "lore/agents/dialogue-audit.jsonl"
     if (output / lore_rel).exists() or (audit / lore_rel).exists():
         defaults, full = rows(output / lore_rel), rows(audit / lore_rel)
@@ -68,13 +75,43 @@ def check(output: Path, audit: Path) -> dict:
         default_by_key = {row["source_key"]: row for row in defaults}
         require(len(full_by_key) == len(full) and len(default_by_key) == len(defaults), "设定互动来源键重复")
         require(default_by_key.keys() == full_by_key.keys(), "设定互动候选来源键缺失")
-        require(all(row["retained"] for row in full), "完整性设定互动不应删减")
+        require(all(row["retained"] or row.get("reason") == "empty_text" for row in full), "完整性设定互动不应删减非空原文")
         for row in defaults:
             require(row["raw_text"] == full_by_key[row["source_key"]]["raw_text"], f"设定原文变化：{row['source_key']}")
             if not row["retained"]:
+                if row.get("reason") == "empty_text":
+                    require(not row.get("text"), f"空文本标记无效：{row['source_key']}")
+                    continue
                 peer = default_by_key.get(row.get("paired_source_key"))
                 require(bool(row.get("reason")) and peer is not None and peer["retained"], f"设定删减配对无效：{row['source_key']}")
         result.update(lore_dialogue_candidates=len(full), lore_dialogue_removed=sum(not row["retained"] for row in defaults))
+    for rel, label in (("lore/street/dialogue-audit.jsonl", "street_dialogue"),
+                       ("lore/interknot/message-audit.jsonl", "messages"),
+                       ("lore/interknot/message-extra-sources.jsonl", "message_extra_sources")):
+        if not (output / rel).exists() and not (audit / rel).exists():
+            continue
+        defaults, full = rows(output / rel), rows(audit / rel)
+        by_key = {row["source_key"]: row for row in full}
+        default_by_key = {row["source_key"]: row for row in defaults}
+        require(len(by_key) == len(full) and len(default_by_key) == len(defaults), f"来源键重复：{rel}")
+        require(by_key.keys() == default_by_key.keys(), f"来源键缺失：{rel}")
+        for row in defaults:
+            require(raw_text(row) == raw_text(by_key[row["source_key"]]), f"原文变化：{row['source_key']}")
+            if row.get("retained") is False:
+                if row.get("reason") == "empty_text":
+                    require(not row.get("text"), row["source_key"])
+                else:
+                    peer = default_by_key.get(row.get("paired_source_key"))
+                    require(peer is not None and peer.get("retained") and bool(row.get("reason")), row["source_key"])
+        require(all(row.get("retained") is not False or row.get("reason") == "empty_text" for row in full),
+                f"完整性审计仍有非空删减：{rel}")
+        result[label + "_candidates"] = len(full)
+    for rel, label in (("lore/interknot/message-config-audit.jsonl", "message_config_events"),
+                       ("lore/interknot/message-item-audit.jsonl", "message_items"),
+                       ("lore/street/metadata-audit.jsonl", "street_metadata")):
+        defaults, full = rows(output / rel, optional=True), rows(audit / rel, optional=True)
+        require(defaults == full, f"配置来源/事件审计不一致：{rel}")
+        result[label] = len(full)
     return result
 
 

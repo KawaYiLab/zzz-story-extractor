@@ -25,6 +25,15 @@ def test_gender_suffix():
     assert parsed.variant == "F"
 
 
+def test_auxiliary_gender_value_is_not_a_second_line():
+    parsed = parse_key("Main_BubbleStory_Chapter170_417001009_01_Gender")
+    assert parsed is not None
+    assert parsed.kind == "source_variant"
+    assert parsed.line_no == 1 and parsed.variant == "Gender"
+    assert parse_key("Main_BubbleStory_Chapter170_417001009_01").kind == "line"
+    assert parse_key("Main_BubbleStory_Chapter170_417001009_01_Unsupported").kind == "other"
+
+
 def test_mainchat():
     parsed = parse_key("MainChat_Chapter05_0069_25")
     assert parsed is not None
