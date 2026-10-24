@@ -18,6 +18,7 @@ from .catalog import (
     map_story_assets,
     story_asset_paths,
 )
+from .content import coverage_report
 from .diff import diff_outputs, format_diff
 from .extract import _cache_root, extract
 from .fetch import (
@@ -55,6 +56,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-lore",
         action="store_true",
         help="skip extracting worldbuilding lore (agents, equipment, interknot, cinema, etc.)",
+    )
+    extract_parser.add_argument(
+        "--no-extra",
+        action="store_true",
+        help="skip activity, side-quest, agent-story and hollow-event text (extra.jsonl)",
     )
     extract_parser.add_argument("--limit", type=int, default=None, help="only process the first N line keys (debug)")
     extract_parser.add_argument(
@@ -107,6 +113,16 @@ def _build_parser() -> argparse.ArgumentParser:
     upload_parser.add_argument("--token", default=os.environ.get("IK_TOKEN"), help="admin bearer token instead of account/password (env IK_TOKEN)")
     upload_parser.add_argument("--save", type=Path, default=None, help="also write the bundle (.json.gz) to this path")
     upload_parser.add_argument("--timeout", type=float, default=300.0, help="HTTP timeout in seconds")
+
+    coverage = sub.add_parser(
+        "coverage",
+        help="report which TextMap dialogue families the content registry covers",
+        description="统计 TextMap 中各内容域的键数与字数，并列出未登记的对白类键族；版本更新后先跑一次。",
+    )
+    coverage.add_argument("--lang", default="CHS", help="TextMap language (default: CHS)")
+    coverage.add_argument("--data-dir", type=Path, default=None, help="local ZenlessData clone")
+    coverage.add_argument("--refresh", action="store_true", help="re-download ZenlessData files")
+    coverage.add_argument("--top", type=int, default=20, help="unclassified families to print")
 
     doctor = sub.add_parser("doctor", help="check data, game and dependencies")
     doctor.add_argument("--data-dir", type=Path, default=None)
@@ -218,6 +234,19 @@ def _diff(args: argparse.Namespace) -> int:
     return 0
 
 
+def _coverage(args: argparse.Namespace) -> int:
+    data_paths = ensure_data(lang=args.lang, refresh=args.refresh, data_dir=args.data_dir)
+    report = coverage_report(load_text_map(data_paths, language=args.lang))
+    print("内容域          键数      字数")
+    for name, row in report["domains"].items():
+        print(f"  {name:<12}{row['keys']:>8}{row['chars']:>10}")
+    unknown = report["unclassified"]
+    print(f"未登记的对白类键族：{len(unknown)}")
+    for row in unknown[: max(args.top, 0)]:
+        print(f"  {row['family']:<24}{row['keys']:>6} 键 {row['chars']:>8} 字  例：{row['example']}")
+    return 0
+
+
 def _verify(out: Path) -> int:
     if not out.exists():
         print(f"error: 找不到输出目录 {out}", file=sys.stderr)
@@ -253,6 +282,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "diff":
         return _diff(args)
+
+    if args.command == "coverage":
+        return _coverage(args)
 
     out = args.out
     if out == Path("out"):
@@ -313,6 +345,7 @@ def main(argv: list[str] | None = None) -> int:
             keep_raw=getattr(args, "keep_raw", False),
             only_chapters=_parse_chapter_filter(getattr(args, "only_chapter", None)),
             accuracy_first=getattr(args, "accuracy_first", False),
+            include_extra=not getattr(args, "no_extra", False),
         )
     except SystemExit as exc:
         print(exc)

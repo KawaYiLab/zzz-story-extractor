@@ -1,6 +1,6 @@
 # 绝区零剧情文本提取器
 
-从公开 [ZenlessData](https://git.mero.moe/dimbreath/ZenlessData) 和本机《绝区零》资源中提取主线文本，解析逐句说话人，导出可读剧本与带来源证据的 JSONL。也支持设定资料导出、语料校验、版本对比和 [绳网后端](https://github.com/KawaYiLab/ikserver-rs) 上传。
+从公开 [ZenlessData](https://git.mero.moe/dimbreath/ZenlessData) 和本机《绝区零》资源中提取主线文本及活动、支线、代理人故事等主线外剧情，解析逐句说话人，导出可读剧本与带来源证据的 JSONL。也支持设定资料导出、语料校验、版本对比和 [绳网后端](https://github.com/KawaYiLab/ikserver-rs) 上传。
 
 当前工具版本为 **0.3.0**，已验证游戏数据版本为 **3.3.0（CHS）**。输出按章节、内容类型和场景整理；**跨场景播放顺序尚未还原**，不能直接将目录顺序当作剧情时间线。
 
@@ -72,7 +72,7 @@ python -m venv .venv
 | `--only-chapter TOKEN` | 按章节 token 筛选，如 `240` 或 `210,220` |
 | `--limit N` | 仅处理前 N 个台词键，用于调试 |
 | `--format jsonl,txt,csv` | 输出格式，默认为 `jsonl,txt`；后续校验与上传需要 JSONL |
-| `--no-speakers` / `--no-lore` / `--no-supplement` | 分别跳过演出说话人解析、设定导出、Comic/CS 补充文本 |
+| `--no-speakers` / `--no-lore` / `--no-supplement` / `--no-extra` | 分别跳过演出说话人解析、设定导出、Comic/CS 补充文本、主线外剧情 |
 | `--accuracy-first` | 关闭分支与重复候选删减、场景名单推断，并保留原文 |
 | `--no-dedupe` | 关闭重复行合并；完整候选核查请使用 `--accuracy-first` |
 | `--keep-raw` | 即使清洗前后相同，也写入 `raw_text` |
@@ -95,6 +95,9 @@ python -m venv .venv
 | `story.txt` / `chapters/` | 按章节与场景组织的可读剧本、分章文本 |
 | `story.csv` | 可选 CSV，包含逐行字段与 JSON 编码的证据 |
 | `supplement.jsonl` / `supplement.txt` | Comic/CS 补充文本，有候选且启用对应格式时生成 |
+| `extra.jsonl` / `extra.txt` | 活动剧情、支线委托、代理人故事、空洞事件等主线外剧情 |
+| `extra-discarded.jsonl` | 主线外剧情的女主副本与相邻同文删减记录 |
+| `content-coverage.json` | 各内容域键数、字数及未登记的对白类键族 |
 | `manifest.json` / `coverage.json` | 输入哈希、版本、章节、计数、覆盖率及校验结果 |
 | `discarded.jsonl` | 删减候选的原文、来源键、原因与配对证据；完整性模式为空 |
 | `speaker-gaps.jsonl` / `placeholder-records.jsonl` | 未解决的说话人记录、已复核的剧情占位说明 |
@@ -118,6 +121,9 @@ python -m venv .venv
 # 检查相邻同文、残留标记及 JSONL/TXT/CSV/分章一致性，写入质量报告
 .\.venv\Scripts\python.exe -m zzz_story.content_audit --output out\zzz_story_3.3.0_chs
 
+# 统计 TextMap 各内容域并列出未登记的对白类键族（只需下载数据）
+.\.venv\Scripts\python.exe -m zzz_story coverage
+
 # 按稳定 line_id 比较两个版本；--examples 0 只显示计数
 .\.venv\Scripts\python.exe -m zzz_story diff --old out\zzz_story_3.2.0_chs --new out\zzz_story_3.3.0_chs
 ```
@@ -126,7 +132,7 @@ python -m venv .venv
 
 ## 上传到绳网后端
 
-`upload` 将 JSONL、清单和 `lore/**/*.md` 打成 gzip 语料包，上传到 [ikserver-rs](https://github.com/KawaYiLab/ikserver-rs)，供剧情库 MCP（`/v1/story/mcp`）检索。需要后端管理员账号或令牌：
+`upload` 将 JSONL（含 `extra.jsonl`）、清单和 `lore/**/*.md` 打成 gzip 语料包，上传到 [ikserver-rs](https://github.com/KawaYiLab/ikserver-rs)，供剧情库 MCP（`/v1/story/mcp`）检索。需要后端管理员账号或令牌：
 
 ```powershell
 .\.venv\Scripts\python.exe -m zzz_story upload --out out\zzz_story_3.3.0_chs --server https://your-server.example --account admin@example.com
@@ -138,7 +144,9 @@ python -m venv .venv
 
 ## 范围与已知限制
 
-- 主线正文覆盖 `Main_GalGame`、`Main_Chat`、`Main_BubbleStory`、`Main_Bubble`、`Main_Ongoing*`、`Main_ChatAudio`、`Main_ChatPlus` 和 `MainChat_Chapter*`。活动、支线、代理人秘闻等不进入 `story.jsonl`；设定及代理人互动单独写入 `lore/`。
+- 主线正文覆盖 `Main_GalGame`、`Main_Chat`、`Main_BubbleStory`、`Main_Bubble`、`Main_Ongoing*`、`Main_ChatAudio`、`Main_ChatPlus`、`MainChat_Chapter*`，以及第一季过场演出的旧式键 `GalGame_Chapter<数字>_*`。
+- 活动、支线、代理人故事、空洞事件写入 `extra.jsonl`（见[数据格式说明](docs/data-format.md#活动支线与代理人故事)），按来源表分组，没有任务或播放顺序关联；未接入游戏资源时大多没有逐句说话人。设定及代理人互动单独写入 `lore/`。
+- 键族归属由 `zzz_story/content.py` 统一登记；`content-coverage.json` 和 `coverage` 命令列出未登记的对白类键族，版本更新后先检查一次。
 - 默认偏向男主视角，有明确证据的分支或副本移入删减审计；无法确认的重复与 NPC 台词继续保留。需要双方候选时使用 `--accuracy-first`。
 - 原显示名优先于配音别名，隐藏身份不被提前揭示；无法可靠关联的角色保留为空。`line_type=unknown` 不等于“有配音但别名缺失”，覆盖率仅对关联配音的保留行计算。
 - 章节内以内容类型、回放档案或来源编号排列，当前跨场景 `chronology_status` 为 `unknown`。局部时间排序只用于证据完整且唯一的单资源、单 section 气泡组。
@@ -163,12 +171,14 @@ git diff --check
 | `fetch.py`、`textmap.py`、`keys.py`、`chapters.py`、`clean.py` | 数据来源、键解析、章节与文本清洗 |
 | `catalog.py`、`mhy1.py`、`odin.py`、`perform*.py`、`timeline.py` | 资源索引、解码、演出节点与时间轴 |
 | `speakers.py`、`narrative.py` | 角色归因、内容分类和局部顺序证据 |
+| `content.py`、`extras.py` | 键族登记表与覆盖统计、主线外剧情提取 |
 | `lore.py`、`writers.py`、`validate.py`、`content_audit.py` | 设定、导出与质量核查 |
 | `diff.py`、`upload.py` | 版本对比与语料打包上传 |
 | `tests/`、`scripts/`、`reference/` | 回归测试、辅助脚本与算法参考 |
 
 审查证据与历史统计：
 
+- [内容覆盖检查：主线外剧情与第一季过场](docs/content-coverage-review-2026-10-24.md)
 - [主线架构检查及后续场景复核](docs/mainline-architecture-review-2026-10-21.md)
 - [3.3 全量内容复查](docs/full-content-review-2026-10-21.md)
 - [提取稳定性审查](docs/review-2026-10-21.md)

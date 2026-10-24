@@ -18,6 +18,9 @@ from .chapters import (
     season_chapter_token,
 )
 from .clean import clean_text
+from .content import coverage_report
+from .extras import candidate_keys as extra_candidate_keys
+from .extras import extract_extras, render_extra_txt
 from .fetch import (
     DEFAULT_VERSION,
     PROJECT_ROOT,
@@ -28,7 +31,7 @@ from .fetch import (
     read_json,
     sha256_file,
 )
-from .keys import ParsedKey, natural_scene_key, parse_key
+from .keys import LEGACY_GALGAME_RE, ParsedKey, natural_scene_key, parse_key
 from .lore import extract_lore
 from .narrative import (
     annotate_attribution,
@@ -45,6 +48,7 @@ from .writers import (
     write_jsonl,
     write_story_txt,
     write_supplement_txt,
+    write_text,
 )
 
 MAIN_FAMILIES = {
@@ -388,6 +392,7 @@ def extract(
     keep_raw: bool = False,
     only_chapters: set[str] | None = None,
     accuracy_first: bool = False,
+    include_extra: bool = True,
 ) -> ExtractStats:
     formats_set = {part.strip().lower() for part in formats.split(",") if part.strip()}
     if not formats_set or formats_set - {"jsonl", "txt", "csv"}:
@@ -399,7 +404,8 @@ def extract(
     # Refuse reserved output paths before writing anything. Reusing a folder
     # can combine new manifests with stale JSONL, chapters or lore.
     reserved = ("story.jsonl", "story.txt", "story.csv", "supplement.jsonl", "supplement.txt",
-                "chapters", "lore", "discarded.jsonl", "name_candidates.jsonl", "speaker-gaps.jsonl", "placeholder-records.jsonl", "coverage.json", "manifest.json")
+                "chapters", "lore", "discarded.jsonl", "name_candidates.jsonl", "speaker-gaps.jsonl", "placeholder-records.jsonl", "coverage.json", "manifest.json",
+                "extra.jsonl", "extra.txt", "extra-discarded.jsonl", "content-coverage.json")
     if any((out_dir / name).exists() for name in reserved):
         raise FileExistsError(f"输出目录已有提取产物：{out_dir}；请指定新的 --out 目录")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -448,10 +454,8 @@ def extract(
 
     for key in text_map.keys():
         if not (
-            key.startswith("Main_")
-            or key.startswith("MainChat_")
-            or key.startswith("Comic_")
-            or key.startswith("CS_")
+            key.startswith(("Main_", "MainChat_", "Comic_", "CS_"))
+            or LEGACY_GALGAME_RE.match(key)
         ):
             continue
         parsed = parse_key(key)
@@ -565,6 +569,10 @@ def extract(
         )
 
     text_keys = {record["_source_key"] for record in pending}
+    # Extras share the speaker index; a chapter filter writes a partial corpus.
+    include_extra = include_extra and only is None and limit is None
+    if include_extra:
+        text_keys.update(item.key for item in extra_candidate_keys(text_map) if item.kind == "line")
     if include_lore:
         text_keys.update(key for key in text_map.keys() if key.startswith(("PartnerTalk_", "Chat_PartnerTalk_")))
     cache_root = _cache_root(data_dir, lang)
@@ -847,6 +855,31 @@ def extract(
     if accuracy_first:
         write_jsonl(name_candidates, out_dir / "name_candidates.jsonl")
 
+    extra_stats = None
+    if include_extra:
+        print("Extracting activity / side / agent stories...")
+        extra_records, extra_discarded, extra_stats = extract_extras(
+            text_map,
+            speaker_index=speaker_index,
+            accuracy_first=accuracy_first,
+            dedupe=dedupe,
+            scene_order=scene_order,
+            quest_names=quest_names,
+        )
+        if "jsonl" in formats_set:
+            write_jsonl(extra_records, out_dir / "extra.jsonl")
+        if "txt" in formats_set:
+            write_text(out_dir / "extra.txt", render_extra_txt(extra_records))
+        write_jsonl(extra_discarded, out_dir / "extra-discarded.jsonl")
+        detail = ", ".join(f"{name} {count}" for name, count in extra_stats.by_domain.items())
+        print(f"  extra lines: {extra_stats.lines} in {len(extra_stats.groups)} groups ({detail})")
+    content_coverage = coverage_report(text_map)
+    write_json(out_dir / "content-coverage.json", content_coverage)
+    unknown = content_coverage["unclassified"]
+    if unknown:
+        top = ", ".join(f"{row['family']}×{row['keys']}" for row in unknown[:5])
+        print(f"  content registry: {len(unknown)} unclassified dialogue-like families (largest: {top})")
+
     lore_stats: dict[str, int] = {}
     if include_lore and only is not None:
         print("  lore skipped: --only-chapter writes a partial corpus")
@@ -938,6 +971,7 @@ def extract(
         "discarded_entries": len(discarded),
         "discarded_by_reason": _count_discard_reasons(discarded),
         "lore_stats": lore_stats,
+        "extra": asdict(extra_stats) if extra_stats else None,
         "chapters": chapters_manifest,
         "validation": validation_manifest,
     }
@@ -965,6 +999,8 @@ def extract(
             "discarded_names": discarded_names,
             "discarded_entries": len(discarded),
             "lore": lore_stats,
+            "extra_lines": extra_stats.lines if extra_stats else 0,
+            "extra_by_domain": extra_stats.by_domain if extra_stats else {},
         },
         "chapter_numbering": "第N季第M章 => Chapter{(N-1)*100 + M*10}",
         "chapter_filter": sorted(only) if only else [],

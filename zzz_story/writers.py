@@ -248,5 +248,9 @@ def write_supplement_txt(records: list[dict], path: Path) -> None:
     _atomic_write_text(path, text)
 
 
+def write_text(path: Path, text: str) -> None:
+    _atomic_write_text(path, text)
+
+
 def write_json(path: Path, payload: dict) -> None:
     _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")

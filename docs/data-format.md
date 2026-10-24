@@ -98,6 +98,29 @@
 - 补充文本 ID 为 `SUP_<source_key>`，新增条目不会重编号。旧 `SUP00001` 等编号应通过来源键迁移。
 - `lore/` 导出设定 Markdown；代理人互动的 `lore/agents/dialogue-audit.jsonl` 保留来源键、原文、角色、资源证据与路线去向。
 
+## 活动、支线与代理人故事
+
+`extra.jsonl` 收录主线以外的剧情文本，字段与主线记录相同（空字段省略），另加 `domain`：
+
+| `domain` | 来源键族（示例） |
+| --- | --- |
+| `activity` 活动剧情 | `Activity_<类型>_<活动>_…`、`ActivityChat_*`、`ActivityBubble_*`、`GalGame_<活动>_…`、`TL_Activity*` |
+| `side` 支线委托 | `Side_<类型>_<支线>_…`、`SideChat_*`、`SideBubble_*`、`PhotoSideChat_*` |
+| `companion` 代理人故事 | `Companion_<类型>_<代理人>_…`、`CompanionChat_*`、`GalGame_Chapter<代理人>_…`、`PartnerDate_*` |
+| `hollow` 空洞事件 | `AutoEvent<事件>_<行>`、`InLevel_<类型>_…` |
+| `other` 其他剧情 | `Other_*`、`Store_*`、`StoreChat_*`、`Enclave*` |
+| `legacy` 旧版文本 | `Galgame_*`（小写 g）、`Chat_Chapter*`；未确认是否仍在游戏中出现 |
+
+- `chapter` 是来源分组 `<domain>.<标签>`，如 `activity.SayItWithFlowers`；`chapter_label` 为 `活动剧情 · SayItWithFlowers`，绑定主线章节的支线表复用章节名。`chapter_order` 从 1,000,000 起按域分段，排在主线之后。
+- `line_id` 为 `EX_<source_key>`，新增条目不会重编号。组内按类型、场景号、行号排列，`chronology_status=unknown`、`context_status=source_key_only`。
+- `speaker` 来自共享的演出/配音索引（需本机游戏），或空洞事件正文中的 `名字：「…」`（`speaker_source=inline`）；其余保持为空，`line_type=unknown`。`_Name` 键只写入 `scene_speakers`。
+- 默认模式丢弃有男主原键的 `…F` 女主副本和同场景相邻同文，写入 `extra-discarded.jsonl`；完整性模式全部保留。
+- `extra.txt` 是按域、分组、场景排版的可读版本。`--no-extra` 跳过；`--only-chapter`、`--limit` 时不生成。
+
+键族归属由 `zzz_story/content.py` 的登记表统一判定。每次提取写出 `content-coverage.json`：各域键数、字数，以及形似对白但未登记的键族（`unclassified`）。版本更新后可单独运行 `python -m zzz_story coverage` 检查新键族。
+
+Season 1 的过场演出使用不带 `Main_` 前缀的 `GalGame_Chapter<数字>_<场景>_<行>`，现由主线流程收入 `story.jsonl`（`family=GalGame`）。`Chapter010`、`Chapter030` 与 `Chapter01`、`Chapter03` 共用章节名和排序位置。
+
 ## 默认模式与完整性模式
 
 默认模式偏向男主视角。明确女主路线、已验证的未使用副本，以及符合既有配对规则的分支或重复候选移入 `discarded.jsonl`。无法严格确认的重复、NPC 同文与独立对白继续保留。

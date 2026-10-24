@@ -6,7 +6,11 @@ through MCP (``POST /v1/story/mcp``). See ikserver-rs ``deploy/README.md``.
 Bundle format (must match ``ik_story::corpus::Bundle`` on the server)::
 
     {"format": 1, "manifest": {...}, "story": "<story.jsonl>",
-     "supplement": "<supplement.jsonl>", "lore": {"agents/01_xxx.md": "..."}}
+     "supplement": "<supplement.jsonl>", "extra": "<extra.jsonl>",
+     "lore": {"agents/01_xxx.md": "..."}}
+
+``extra`` (activities, side quests, agent stories) is optional; servers that
+predate it ignore the field.
 
 gzip-compressed JSON, sent as ``PUT /v1/admin/story/corpus`` with an admin bearer token.
 """
@@ -35,7 +39,7 @@ class UploadError(RuntimeError):
 
 
 def build_bundle(out_dir: Path) -> dict[str, Any]:
-    """Read story.jsonl (required), supplement.jsonl, manifest.json and lore/**/*.md."""
+    """Read story.jsonl (required), supplement.jsonl, extra.jsonl, manifest.json and lore/**/*.md."""
     story = out_dir / "story.jsonl"
     if not story.is_file():
         raise UploadError(f"{out_dir} 里没有 story.jsonl，先运行 `python -m zzz_story extract`")
@@ -44,6 +48,7 @@ def build_bundle(out_dir: Path) -> dict[str, Any]:
         "manifest": None,
         "story": story.read_text(encoding="utf-8"),
         "supplement": None,
+        "extra": None,
         "lore": {},
     }
     manifest = out_dir / "manifest.json"
@@ -52,6 +57,9 @@ def build_bundle(out_dir: Path) -> dict[str, Any]:
     supplement = out_dir / "supplement.jsonl"
     if supplement.is_file():
         bundle["supplement"] = supplement.read_text(encoding="utf-8")
+    extra = out_dir / "extra.jsonl"
+    if extra.is_file():
+        bundle["extra"] = extra.read_text(encoding="utf-8")
     _normalize_chapter_orders(bundle)
     lore_dir = out_dir / "lore"
     if lore_dir.is_dir():

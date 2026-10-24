@@ -37,6 +37,13 @@ def test_build_bundle_reads_outputs(tmp_path):
     assert bundle["supplement"].endswith("\n")
     assert set(bundle["lore"]) == {"README.md", "agents/01_狡兔屋.md"}
     assert "story.txt" not in json.dumps(bundle, ensure_ascii=False)
+    assert bundle["extra"] is None
+
+
+def test_build_bundle_includes_extra_stories(tmp_path):
+    out = make_output(tmp_path)
+    (out / "extra.jsonl").write_text('{"domain":"activity","chapter":"activity.Fest","text":"活动"}\n', encoding="utf-8")
+    assert build_bundle(out)["extra"].startswith('{"domain":"activity"')
 
 
 def test_encode_is_deterministic_gzip_json(tmp_path):

@@ -21,6 +21,12 @@ class ParsedKey:
 _LINE_RE = re.compile(r"^(\d+)(?:_(\d+))?([MF])?$")
 _NAME_RE = re.compile(r"^(?:Name|name)(?:_?(\d+))?([MF])?$")
 _OPTION_RE = re.compile(r"^Option(\d+)_(\d+)([MF])?$", re.IGNORECASE)
+# Season-1 cutscenes: ``03_Option1_02F_Main`` (line 3, option group 1, entry 2).
+_LEGACY_OPTION_RE = re.compile(r"^(\d+)_Option(\d+)(?:_(\d+))?([MF])?(?:_Main)?$", re.IGNORECASE)
+# Season-1 cutscenes predate the ``Main_`` prefix: ``GalGame_Chapter050_010_001``.
+# Only numeric chapter tokens are mainline; ``GalGame_ChapterMana`` is an
+# agent story and is handled by ``extras.py``.
+LEGACY_GALGAME_RE = re.compile(r"^GalGame_(Chapter\d+)_([^_]+)_(.+)$")
 
 
 def _parse_suffix(suffix: str) -> tuple[str, int | None, int | None, str | None]:
@@ -43,6 +49,10 @@ def _parse_suffix(suffix: str) -> tuple[str, int | None, int | None, str | None]
     match = _OPTION_RE.match(suffix)
     if match:
         return ("line", int(match.group(2)), int(match.group(1)), match.group(3))
+    match = _LEGACY_OPTION_RE.match(suffix)
+    if match:
+        sub_no = int(match.group(2)) * 100 + int(match.group(3) or 0)
+        return ("line", int(match.group(1)), sub_no, match.group(4))
     return ("other", None, None, None)
 
 
@@ -76,6 +86,12 @@ def parse_key(key: str) -> ParsedKey | None:
         chapter, scene, suffix = split
         kind, line_no, sub_no, variant = _parse_suffix(suffix)
         return ParsedKey(key, family, chapter, scene, kind, line_no, sub_no, variant)
+
+    match = LEGACY_GALGAME_RE.match(key)
+    if match:
+        chapter, scene, suffix = match.groups()
+        kind, line_no, sub_no, variant = _parse_suffix(suffix)
+        return ParsedKey(key, "GalGame", chapter, scene, kind, line_no, sub_no, variant)
 
     if key.startswith("MainChat_"):
         rest = key[len("MainChat_"):]

@@ -64,6 +64,12 @@ LABELS: dict[str, str] = {
 # server's chapter_order is i64, so fractional positions must not reach JSONL.
 CHAPTER_ORDER_SCALE = 10
 _INDEX = {token: i * CHAPTER_ORDER_SCALE for i, token in enumerate(ORDERED_TOKENS)}
+# Season-1 cutscene tables (``GalGame_Chapter010``) use a second token for an
+# existing chapter.  They share its slot so later orders do not shift.
+TOKEN_ALIASES = {"010": "01", "030": "03"}
+for _alias, _base in TOKEN_ALIASES.items():
+    _INDEX[_alias] = _INDEX[_base]
+    LABELS[_alias] = LABELS[_base]
 _CHAPTER_RE = re.compile(r"^Chapter(?P<short>.+)$", re.IGNORECASE)
 _SEASON_CHAPTER_RE = re.compile(r"^([1-9])(\d)$")
 
