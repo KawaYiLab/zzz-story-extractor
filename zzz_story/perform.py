@@ -170,7 +170,9 @@ def scan_perform_blocks(
             stats.cab_files += 1
             if wanted and graph_marker in cab:
                 try:
-                    stats.graphs.update(graphs_from_cab(cab, wanted))
+                    target_errors = {}
+                    stats.graphs.update(graphs_from_cab(cab, wanted, errors=target_errors))
+                    stats.graph_errors.update(target_errors)
                 except (ValueError, KeyError, UnicodeDecodeError) as exc:
                     # Unknown layouts remain available to the legacy scanner;
                     # never turn a parse failure into evidence of unused text.

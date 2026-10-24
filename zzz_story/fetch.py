@@ -54,6 +54,12 @@ REQUIRED_FILES = [
     "FileCfg/ChapterConfigTemplateTb.json",
     "FileCfg/MainStorySeasonTemplateTb.json",
     "FileCfg/AvatarBaseTemplateTb.json",
+    # SMS line identities and contact/item references; sender IDs may be
+    # conditional, so the resolver preserves conflicting candidates.
+    "FileCfg/MessageConfigTemplateTb.json",
+    "FileCfg/MessageGroupConfigTemplateTb.json",
+    "FileCfg/MessageNPCTemplateTb.json",
+    "FileCfg/MessageItemConfigTemplateTb.json",
     "Data/_unsorted/VoiceData.json",
 ]
 

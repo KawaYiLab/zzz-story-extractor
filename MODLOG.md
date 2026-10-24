@@ -284,3 +284,71 @@ saved in out/search_usability_3.3.0.json. The 3.3 core query returns four
 documents/five lines; the three-concept query remains strict-zero but
 returns labeled partial candidates by default. Extraction data unchanged;
 no upload, deployment, commit or push performed.
+
+## 2026-10-22 Existing-dialogue actor evidence completion
+
+Offline inspection confirmed that bubble assets 40100031 and 4000064 contain
+only storySections/storySegment and Speaker A/B slots, without an actor-name
+table. Same-resource/section/slot propagation has no unique known-name peer
+for the unresolved main-story candidates. Fixed-snapshot NPCSub and main-city
+object/graph tables were inspected outside the repository; 458 TextAssets in
+the DateIdleMoveToBubble block contain no unresolved main-scene ID match.
+Their ShowBubble calls use scoped npcTag/bubbleId parameters, so this pass
+does not invent a global slot binding or claim all call sites were recovered.
+
+OngoingTips exact complete voice references identify eight previously unnamed
+LuciasFather bubble lines as the displayed “警惕的队长”. Different source wording
+is preserved and recorded as speaker_evidence.text_difference; no internal
+alias-wide name mapping is added. Conflicting keys and explicit hidden names
+remain unresolved. Tip attribution now covers existing partner/street sources
+and preserves Perform/Timeline evidence.
+
+MainCityChatTransitionWithActionsNode (nodeType 29) owns
+TransitionWithActionsCfg.DialogueKey screen text. Occurrences retain the
+playable parent type and classify this validated combination as narration;
+unknown child configuration types are not reclassified by name.
+See docs/actor-binding-findings-2026-10-22.md for exact keys, sources, hashes
+and the limits of the actor-slot search. Focused actor/parser tests pass.
+
+The expanded scan's 26 layout errors are verified null layouts: 24 saved
+empty storySections and two sparse node arrays. Preserve empty/partial status
+and null node addresses, never jump across holes or use partial graphs to
+prove unused copies. Re-scanning the two affected blocks produces 3,925
+complete, 24 empty and two partial graphs with no parse errors. Per-target
+CAB error collection now preserves successful sibling assets. Resolver cache
+fingerprints include the partner/street prefix helpers used for asset scope.
+
+## 2026-10-22 Existing-content completion final
+
+The same 3.3.0 CHS snapshot and CNPRODWin3.3.0 local files now produce
+out/zzz_story_3.3.0_chs_completed_v2_20261022 and the matching _audit.
+All 13 old input hashes are unchanged; four SMS tables use the same pinned
+fd6cb326c07c75f39b0b05845d204302c451ec34 commit.
+
+Partner candidates increase 40,033 -> 53,845 (+13,812), with every old key
+and raw text preserved. Street export preserves 24,058 candidates (23,949
+retained), including short/repeated sources and 240 legacy Bubble_PasserBy,
+activity and enclave sources; 3,561 name/title sources are
+metadata. SMS retains 9,925 sources with 8,640 confirmed identities and
+1,285 unknown, plus 4,633 extra text sources and 151 attachment sources.
+Mixed message/choice references retain occurrence identities but no global
+sender claim. Role labels are not character names.
+
+ComicConfig external CAB/PPtr, owned tracks and BubbleEvent UUIDs link
+2,452/2,505 existing comic sources; 459 explicit body display names are
+confirmed. Animation strings are excluded by field layout, not a blacklist.
+One auxiliary Gender source and six empty main sources receive audits.
+No source IDs or main/comic export order is rewritten.
+
+Main retained count stays 46,873, with 8 names restored and 57 presentation
+lines correctly classified. Existing main names remain intact; unresolved
+identity records decrease 2,298 -> 2,233. Ten old partner labels are retracted
+(eight unbound slots and two choices), retaining raw text and destinations.
+
+225 tests, Ruff and diff whitespace checks pass. Both verify/content audits
+pass with zero text anomalies/export errors. All 57,928 main/supplement
+candidates reconcile as 51,478 retained and 6,450 audited removals, plus five
+name removals. Extended checks cover lore, SMS/config/items and source audits.
+The old baseline remains; no upload, deployment, commit or push is made.
+See docs/existing-content-completion-2026-10-22.md for exact output locations
+and remaining evidence limits. Game text/research caches remain ignored.

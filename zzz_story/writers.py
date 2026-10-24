@@ -237,11 +237,14 @@ def write_supplement_txt(records: list[dict], path: Path) -> None:
 
         if family == "Comic":
             source = record.get("source_key") or record.get("line_id") or "未知来源"
-            chunks.extend(["", f"### 独立片段 {source}（上下文未关联；相邻片段不代表连续剧情）", ""])
+            scenes = record.get("comic_scenes")
+            context = "漫画资源：" + "、".join(scenes) if scenes else "上下文未关联"
+            chunks.extend(["", f"### 独立片段 {source}（{context}；相邻片段不代表连续剧情）", ""])
         elif family != "CS" and record.get("scene") != current_scene:
             current_scene = record.get("scene")
             chunks.extend(["", f"### 片段 {current_scene}", ""])
-        chunks.append(record.get("text", ""))
+        text = record.get("text", "")
+        chunks.append(f"【{record['speaker']}】{text}" if record.get("speaker") else text)
 
     raw_text = "\n".join(chunks).strip() + "\n"
     text = re.sub(r"\n{3,}", "\n\n", raw_text)

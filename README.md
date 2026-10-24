@@ -101,8 +101,10 @@ python -m venv .venv
 | `manifest.json` / `coverage.json` | 输入哈希、版本、章节、计数、覆盖率及校验结果 |
 | `discarded.jsonl` | 删减候选的原文、来源键、原因与配对证据；完整性模式为空 |
 | `speaker-gaps.jsonl` / `placeholder-records.jsonl` | 未解决的说话人记录、已复核的剧情占位说明 |
+| `source-variants.jsonl` / `source-gaps.jsonl` | 辅助来源原文、空主线来源与英文原文存在情况 |
+| `supplement-context-report.json` | 漫画资源关联统计与缺失资源 |
 | `name_candidates.jsonl` | 完整性模式的姓名候选，用于核验姓名条目删减 |
-| `lore/` | 代理人、装备、绳网、影院等设定 Markdown，以及互动对白审计 |
+| `lore/` | 代理人、装备、绳网、影院等设定 Markdown，以及代理人、街头、短信和附件来源审计 |
 | `content-audit.md` / `content-audit.json` | 单独运行内容审计后生成的质量报告 |
 
 字段、排序、覆盖率和删减审计的详细约定见 [数据格式说明](docs/data-format.md)。计数随输入、筛选范围和解析版本变化，请以本次输出的清单为准。
@@ -150,7 +152,8 @@ python -m venv .venv
 - 默认偏向男主视角，有明确证据的分支或副本移入删减审计；无法确认的重复与 NPC 台词继续保留。需要双方候选时使用 `--accuracy-first`。
 - 原显示名优先于配音别名，隐藏身份不被提前揭示；无法可靠关联的角色保留为空。`line_type=unknown` 不等于“有配音但别名缺失”，覆盖率仅对关联配音的保留行计算。
 - 章节内以内容类型、回放档案或来源编号排列，当前跨场景 `chronology_status` 为 `unknown`。局部时间排序只用于证据完整且唯一的单资源、单 section 气泡组。
-- Comic 尚无可靠的场景关联；CS 只确认章节关系。它们独立输出，不能按相邻位置串成连续剧情。
+- Comic 可通过 ComicConfig、外部 CAB/PPtr、所属 Timeline 和 BubbleEvent UUID 确认漫画资源与显示名；缺引用者保留未知。CS 只确认章节关系。它们独立输出，跨场景顺序仍未还原。
+- 代理人和街头互动保留短句、同文不同来源与未确认分支；姓名和事件标题单独审计。短信按配置区分联系人、正文发送方和回复选项，零 ID、冲突或同源多角色引用保留未知，并补出长回复与附件来源。
 - 已复核的编写说明保留为 `placeholder`，原角色标注另存证据。资源节点、配音键或姓名表存在，均不能单独证明它是正式对白或实际被播放。
 - 输入下载固定同一上游提交并记录文件哈希；缺少可核验来源时标记 `source_version=unknown`。缓存指纹会随输入与资源元数据变更而重建；保留元数据的二进制改动需手动 `--refresh-speakers`。
 
@@ -181,6 +184,7 @@ git diff --check
 - [内容覆盖检查：主线外剧情与第一季过场](docs/content-coverage-review-2026-10-24.md)
 - [主线架构检查及后续场景复核](docs/mainline-architecture-review-2026-10-21.md)
 - [3.3 全量内容复查](docs/full-content-review-2026-10-21.md)
+- [已有内容补齐结果](docs/existing-content-completion-2026-10-22.md)
 - [提取稳定性审查](docs/review-2026-10-21.md)
 - [3.3.0 资源兼容记录](MODLOG.md)
 

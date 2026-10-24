@@ -136,7 +136,7 @@ def oodle_decompress(data: bytes, raw_size: int) -> bytes:
     return ooz.decompress(data, raw_size)
 
 
-def unpack_mhy_file(file: bytes, start: int) -> tuple[list[bytes], int]:
+def unpack_mhy_named_file(file: bytes, start: int) -> tuple[list[tuple[str, bytes]], int]:
     if file[start:start + 4] != b"mhy1":
         raise MhyError(f"invalid mhy1 signature at {start}")
     if start + 8 > len(file):
@@ -182,16 +182,21 @@ def unpack_mhy_file(file: bytes, start: int) -> tuple[list[bytes], int]:
         target_offset += raw
 
     files = [
-        bytes(contents[node.offset:node.offset + node.size])
+        (node.path, bytes(contents[node.offset:node.offset + node.size]))
         for node in nodes
         if not node.path.lower().endswith(".ress")
     ]
     return files, source_offset
 
 
-def extract_mhy_files(block: bytes) -> list[bytes]:
-    """Extract every concatenated mhy1 container in a .blk file."""
-    result: list[bytes] = []
+def unpack_mhy_file(file: bytes, start: int) -> tuple[list[bytes], int]:
+    named, end = unpack_mhy_named_file(file, start)
+    return [data for _, data in named], end
+
+
+def extract_mhy_named_files(block: bytes) -> list[tuple[str, bytes]]:
+    """Keep serialized CAB names for exact external Unity PPtr resolution."""
+    result: list[tuple[str, bytes]] = []
     offset = 0
     length = len(block)
     while offset + 8 <= length:
@@ -205,9 +210,14 @@ def extract_mhy_files(block: bytes) -> list[bytes]:
                 break
             offset = next_offset
         try:
-            files, end = unpack_mhy_file(block, offset)
+            files, end = unpack_mhy_named_file(block, offset)
             result.extend(files)
             offset = end if end > offset else offset + 4
         except MhyError:
             offset += 4
     return result
+
+
+def extract_mhy_files(block: bytes) -> list[bytes]:
+    """Extract every concatenated mhy1 container in a .blk file."""
+    return [data for _, data in extract_mhy_named_files(block)]

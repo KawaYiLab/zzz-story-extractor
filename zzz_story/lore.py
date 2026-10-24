@@ -8,8 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from .clean import clean_text
+from .message_config import load_message_metadata, source_identity
+from .narrative import annotate_attribution
+from .partner_dialogue import parse_partner_dialogue, sequence_order
+from .street_dialogue import extract_street
 from .textmap import TextMap
-from .writers import write_jsonl
+from .writers import _record_line, write_jsonl
 
 # Early CBT1 avatar mapping for Birthday and Stature (01..09)
 EARLY_AVATAR_ATTR_MAP: dict[str, str] = {
@@ -331,6 +335,7 @@ def extract_lore(
     *,
     speaker_index=None,
     accuracy_first: bool = False,
+    data_paths: dict[str, Path] | None = None,
 ) -> dict[str, int]:
     """Extract all worldview / lore categories and output structured Markdown files."""
     lore_dir = out_dir / "lore"
@@ -343,10 +348,12 @@ def extract_lore(
     stats.update(_extract_agents(text_map, avatar_base_data, lore_dir / "agents",
                                 speaker_index=speaker_index, accuracy_first=accuracy_first))
     stats.update(_extract_equipment(text_map, lore_dir / "equipment", avatar_base_data))
-    stats.update(_extract_interknot(text_map, lore_dir / "interknot"))
+    stats.update(_extract_interknot(text_map, lore_dir / "interknot",
+                                   message_metadata=load_message_metadata(data_paths, text_map)))
     stats.update(_extract_cinema(text_map, lore_dir / "cinema"))
     stats.update(_extract_glossary(text_map, lore_dir / "glossary"))
-    stats.update(_extract_street(text_map, lore_dir / "street"))
+    stats.update(extract_street(text_map, lore_dir / "street",
+                                speaker_index=speaker_index, accuracy_first=accuracy_first))
 
     _generate_lore_index(lore_dir, stats)
     return stats
@@ -376,88 +383,109 @@ def _extract_agents(
         raw_entries = avatar_base_data
 
     playable: list[dict[str, Any]] = []
-    seen_names: set[str] = set()
-    tag_to_aid: dict[str, str] = dict(DIALOGUE_TAG_ALIASES)
+    name_to_aid: dict[str, str] = {}
+    tag_candidates = defaultdict(set)
+    for tag, aid in DIALOGUE_TAG_ALIASES.items():
+        tag_candidates[tag].add(aid)
 
-    for e in raw_entries:
-        name_key = e.get("HAKHHHCAENA") or ""
-        name = tm.get(name_key)
-        aid = str(e.get("PFOAJKNPCHL", 0))
-        code = str(e.get("FEKFJBFGANO") or "").lower()
-        if code:
-            tag_to_aid[code] = aid
-            tag_to_aid[f"partner{code}"] = aid
-        if name and name not in seen_names:
-            seen_names.add(name)
-            playable.append(e)
+    for entry in raw_entries:
+        name = tm.get(entry.get("HAKHHHCAENA") or "")
+        aid = str(entry.get("PFOAJKNPCHL", 0))
+        code = str(entry.get("FEKFJBFGANO") or "").lower()
+        if name:
+            canonical = name_to_aid.setdefault(name, aid)
+            if canonical == aid:
+                playable.append(entry)
+            # Same-name skins share the displayed dossier. A later duplicate
+            # must not redirect its entire dialogue stream to an omitted ID.
+            if code:
+                tag_candidates[code].add(canonical)
+                tag_candidates[f"partner{code}"].add(canonical)
+            tag_candidates[f"partner{aid}"].add(canonical)
+    playable_ids = {str(entry.get("PFOAJKNPCHL", 0)) for entry in playable}
+    tag_to_aid = {tag: next(iter(ids)) for tag, ids in tag_candidates.items() if len(ids) == 1}
 
-    # Collect dialogue streams
-    gal_events: dict[str, dict[str, list[tuple[str, str, str]]]] = defaultdict(lambda: defaultdict(list))
-    chat_events: dict[str, dict[str, list[tuple[str, str, str]]]] = defaultdict(lambda: defaultdict(list))
-    bubble_events: dict[str, dict[str, list[tuple[str, str, str]]]] = defaultdict(lambda: defaultdict(list))
+    streams = defaultdict(list)
     dialogue_audit = []
+    for key, raw in tm.items():
+        parsed = parse_partner_dialogue(key)
+        if parsed is None:
+            continue
+        info = speaker_index.lookup(key) if speaker_index else None
+        link = info.perform if info and info.perform else {}
+        timeline = info.timeline if info and info.timeline else None
+        aid = tag_to_aid.get((parsed.agent_tag or "").lower())
+        if aid not in playable_ids:
+            aid = None
+        ct = clean_text(raw, parsed.variant or "M")
+        display = clean_text(info.speaker, parsed.variant or "M").text if info and info.speaker else None
+        is_option = (display in {"选项", "玩家选项"}
+                     or bool(speaker_index and speaker_index.is_option(key)) or "_Option" in key)
+        display_role = display if display in {"选项", "玩家选项", "旁白", "玩家"} else None
+        speaker = None if is_option or display_role else display
+        row = {
+            "source_key": key, "raw_text": raw, "text": ct.text,
+            "text_variants": ct.variants, "variant": parsed.variant,
+            "scope": parsed.scope, "family": parsed.family,
+            "event_id": parsed.event, "event_tag": parsed.agent_tag,
+            "chapter": parsed.scope, "scene": parsed.event,
+            "sequence": parsed.sequence, "agent_id": aid,
+            "context_status": "source_tag" if aid else "unresolved",
+            "speaker": speaker,
+            "source_display_role": display_role,
+            "speaker_source": info.source if speaker else "none",
+            "speaker_confidence": info.confidence if speaker else 0.0,
+            "speaker_status": "not_applicable" if is_option else "resolved" if speaker else "unresolved",
+            "line_type": "option" if is_option else "narration" if display_role == "旁白" else "dialogue" if speaker else "unknown",
+            "has_voice": bool(info and info.has_voice),
+            "retained": bool(ct.text), "reason": None if ct.text else "empty_text",
+            "paired_source_key": None, "perform": link or None, "timeline": timeline,
+            "chronology_status": "unknown", "line_order_source": "source_key",
+        }
+        annotate_attribution([row])
+        dialogue_audit.append(row)
+        # The source family is part of an event's identity. Chat and bubble
+        # resources with the same numeric ID are not one dialogue stream.
+        streams[(aid, parsed.group)].append(row)
 
-    for k, v in tm.items():
-        if k.startswith(("PartnerTalk_", "Chat_PartnerTalk_")):
-            suffix = k.split("_")[-1]
-            # Name metadata and unknown layouts are not dialogue lines.
-            if "_Name" in k or "_name" in k or not re.fullmatch(r"\d+[MF]?", suffix):
-                continue
-        if k.startswith("PartnerTalk_GalGame_"):
-            parts = k.split("_")
-            if len(parts) >= 5:
-                aid = tag_to_aid.get(parts[2].lower())
-                if aid:
-                    gal_events[aid][parts[3]].append(("_".join(parts[4:]), _clean(v), k))
-        elif k.startswith("PartnerTalk_BubbleStory_"):
-            parts = k.split("_")
-            if len(parts) >= 4:
-                aid = tag_to_aid.get(parts[2].lower())
-                if aid:
-                    lid = parts[4] if len(parts) >= 5 else "01"
-                    bubble_events[aid][parts[3]].append((lid, _clean(v), k))
-        elif k.startswith("PartnerTalk_Chat_Partner"):
-            parts = k.split("_")
-            if len(parts) >= 4:
-                aid = tag_to_aid.get(parts[2].lower())
-                if aid:
-                    lid = parts[-1] if len(parts) >= 5 else "01"
-                    chat_events[aid]["_".join(parts[3:-1])].append((lid, _clean(v), k))
-        elif k.startswith("PartnerTalk_Chat_33"):
-            m = re.match(r"PartnerTalk_Chat_33(\d{3})(\d+)_(\d+)", k)
-            if m:
-                aid = str(1000 + int(m.group(1)) * 10 + 1)
-                eid = m.group(1) + m.group(2)
-                chat_events[aid][eid].append((m.group(3), _clean(v), k))
-        elif k.startswith("Chat_PartnerTalk_"):
-            parts = k.split("_")
-            if len(parts) >= 4:
-                aid = tag_to_aid.get(parts[2].lower())
-                if aid:
-                    eid = "_".join(parts[3:-1]) if len(parts) > 4 else parts[3]
-                    lid = parts[-1]
-                    chat_events[aid][eid].append((lid, _clean(v), k))
+    for rows in streams.values():
+        available = {row["source_key"]: row for row in rows}
+        for row in rows:
+            link = row.get("perform") or {}
+            peer = available.get(link.get("paired_key"))
+            peer_link = (peer or {}).get("perform") or {}
+            removed = (not accuracy_first and row["retained"] and peer and peer["retained"]
+                       and link.get("explicit_gender") and link.get("sides") == ["F"]
+                       and peer_link.get("explicit_gender") and peer_link.get("sides") == ["M"]
+                       and peer_link.get("paired_key") == row["source_key"])
+            if removed:
+                row.update(retained=False, reason="perform_gender_route",
+                           paired_source_key=peer["source_key"])
 
     def rendered_dialogues(values):
-        available = {key for _, _, key in values}
         result = []
-        for seq, text, key in sorted(values, key=lambda item: (int(re.match(r"\d+", item[0])[0]), item[0], item[2])):
-            info = speaker_index.lookup(key) if speaker_index else None
-            link = info.perform if info and info.perform else {}
-            peer = link.get("paired_key")
-            peer_info = speaker_index.lookup(peer) if speaker_index and peer else None
-            peer_link = peer_info.perform if peer_info and peer_info.perform else {}
-            removed = (not accuracy_first and link.get("explicit_gender") and link.get("sides") == ["F"]
-                       and peer in available and peer_link.get("explicit_gender") and peer_link.get("sides") == ["M"]
-                       and peer_link.get("paired_key") == key)
-            display = clean_text(info.speaker, "M").text if info and info.speaker else None
-            dialogue_audit.append({"source_key": key, "raw_text": tm.get(key), "text": text,
-                                   "speaker": display, "retained": not removed,
-                                   "reason": "perform_gender_route" if removed else None,
-                                   "paired_source_key": peer if removed else None, "perform": link or None})
-            if not removed:
-                result.append(f"{'【' + display + '】' if display else ''}{text} (`{key}`)")
+        for row in sorted(values, key=lambda item: (sequence_order(item["sequence"]), item["source_key"])):
+            if not row["retained"]:
+                continue
+            result.append(f"{_record_line(row)} (`{row['source_key']}`)")
         return result
+
+    def event_label(group):
+        scope, family, event, tag = group
+        # Existing labels stay stable; other layouts retain their scope so
+        # nested encounters and separate content families cannot be confused.
+        if scope in {"PartnerTalk", "Chat_PartnerTalk"} and family in {"GalGame", "Chat", "BubbleStory"}:
+            return event
+        return " / ".join(part for part in (scope, family, tag, event) if part)
+
+    gal_events, chat_events, bubble_events = defaultdict(dict), defaultdict(dict), defaultdict(dict)
+    unknown_events = {}
+    for (aid, group), rows in streams.items():
+        if aid is None:
+            unknown_events[group] = rows
+            continue
+        category = gal_events if group[1] == "GalGame" else bubble_events if "Bubble" in group[1] else chat_events
+        category[aid][group] = rows
 
     # Identify all Mindscape Cinema prefixes
     all_talent_prefixes: set[str] = set()
@@ -578,23 +606,26 @@ def _extract_agents(
         # Hangout / GalGame events
         agent_gals: list[dict[str, Any]] = []
         if aid in gal_events:
-            for eid in sorted(gal_events[aid].keys()):
-                title = _clean(tm.get(f"Title_{eid}", f"专属邀约 {eid}"))
-                sorted_lines = rendered_dialogues(gal_events[aid][eid])
+            for group in sorted(gal_events[aid], key=str):
+                eid = event_label(group)
+                title = _clean(tm.get(f"Title_{group[2]}", f"专属邀约 {eid}"))
+                sorted_lines = rendered_dialogues(gal_events[aid][group])
                 agent_gals.append({"eid": eid, "title": title, "lines": sorted_lines})
 
         # Street chat encounters
         agent_chats: list[dict[str, Any]] = []
         if aid in chat_events:
-            for eid in sorted(chat_events[aid].keys()):
-                sorted_lines = rendered_dialogues(chat_events[aid][eid])
+            for group in sorted(chat_events[aid], key=str):
+                eid = event_label(group)
+                sorted_lines = rendered_dialogues(chat_events[aid][group])
                 agent_chats.append({"eid": eid, "lines": sorted_lines})
 
         # Street bubble interactions
         agent_bubbles: list[dict[str, Any]] = []
         if aid in bubble_events:
-            for eid in sorted(bubble_events[aid].keys()):
-                sorted_lines = rendered_dialogues(bubble_events[aid][eid])
+            for group in sorted(bubble_events[aid], key=str):
+                eid = event_label(group)
+                sorted_lines = rendered_dialogues(bubble_events[aid][group])
                 agent_bubbles.append({"eid": eid, "lines": sorted_lines})
 
         info = {
@@ -759,10 +790,20 @@ def _extract_agents(
             f"{ag['birthday'] or '-'} | {ag['stature'] or '-'} | {ag['aptitude']} | {w_str} | {cinema_str} | {inter_str} |"
         )
     (agents_dir / "00_代理人全景总览.md").write_text("\n".join(ov_lines), encoding="utf-8")
+    unassigned_lines = ["# 尚未关联代理人档案的互动文本\n",
+                        "> 保留独立来源及原文；姓名表和编号不能单独证明所属代理人或逐句说话人。分支与播放先后尚未核实。\n"]
+    for group, rows in sorted(unknown_events.items(), key=lambda item: str(item[0])):
+        unassigned_lines.append(f"## {event_label(group)}\n")
+        unassigned_lines.extend(f"- {line}" for line in rendered_dialogues(rows))
+        unassigned_lines.append("")
+    (agents_dir / "13_未关联代理人互动.md").write_text("\n".join(unassigned_lines), encoding="utf-8")
     write_jsonl(dialogue_audit, agents_dir / "dialogue-audit.jsonl")
+    write_jsonl((row for row in dialogue_audit if row["agent_id"] is None), agents_dir / "unassigned-dialogue.jsonl")
 
     return {"lore_agents": agent_count, "lore_dialogue_candidates": len(dialogue_audit),
-            "lore_dialogue_removed": sum(not row["retained"] for row in dialogue_audit)}
+            "lore_dialogue_removed": sum(not row["retained"] for row in dialogue_audit),
+            "lore_dialogue_unassigned": sum(row["agent_id"] is None for row in dialogue_audit),
+            "lore_dialogue_speaker_resolved": sum(row["retained"] and bool(row["speaker"]) for row in dialogue_audit)}
 
 
 def _extract_equipment(
@@ -1451,7 +1492,7 @@ def _extract_equipment(
     }
 
 
-def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
+def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | None = None) -> dict[str, int]:
     knot_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Forum posts (PostTitle_*, Poster_*, PostText_*, PostScript_*, Comment<N>_*, Commentator<N>_*)
@@ -1748,7 +1789,9 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
     (knot_dir / "01_委托人任务档案.md").write_text("\n".join(q_md), encoding="utf-8")
 
     # 3. Private Messages & Instant Messaging (Message_*)
-    threads: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+    metadata = message_metadata or {}
+    threads: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
+    unrendered_message_sources = []
     for k, v in tm.items():
         if not k.startswith("Message_"):
             continue
@@ -1758,16 +1801,27 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
             or k.endswith(("_name", "_Tips", "_Name"))
         ):
             continue
-        if "_" in mid:
+        identity = source_identity(metadata, k)
+        if identity["thread_id"]:
+            tid = identity["thread_id"]
+            config_ids = {str(value["config_id"]) for value in identity["references"]}
+            seq = next(iter(config_ids)) if len(config_ids) == 1 else mid
+        elif "_" in mid:
             tid, seq = mid.rsplit("_", 1)
         elif mid.isdigit() and len(mid) >= 5:
             tid, seq = mid[:-2], mid[-2:]
         else:
-            continue
+            tid, seq = "unassigned", mid
         text = _clean(v)
-        if not text or "占位" in text:
+        if not text:
+            unrendered_message_sources.append({"source_key": k, "thread_id": tid, "sequence": seq,
+                                               "raw_text": v, "text": text, "text_variants": clean_text(v).variants,
+                                               "retained": False, "reason": "empty_text",
+                                               "sender": identity["sender"], "sender_status": identity["sender_status"],
+                                               "sender_source": identity["sender_source"],
+                                               "config_references": identity["references"], "chronology_status": "unknown"})
             continue
-        threads[tid].append((seq, text, v))
+        threads[tid].append((seq, text, v, k))
 
     # Extract dynamic Trust Memos (SenderNotes) from TextMap if present
     trust_memos: dict[str, tuple[str, str, str]] = {}
@@ -1781,6 +1835,10 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
                 trust_memos[cid] = (n1, n2, n3)
 
     def _get_agent_code(tid_str: str) -> int | None:
+        configured = metadata.get("contacts", {}).get(tid_str)
+        if configured is not None:
+            codes = [code for code, agent in CANONICAL_SMS_AGENTS.items() if agent[1] == configured.get("contact")]
+            return codes[0] if len(codes) == 1 else None
         if tid_str.startswith("40") and len(tid_str) >= 4 and tid_str[2:4].isdigit():
             return int(tid_str[2:4])
         if tid_str.startswith("4") and len(tid_str) >= 3 and tid_str[1:3].isdigit():
@@ -1826,6 +1884,12 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
         return None
 
     def _resolve_street_contact(tid_str: str) -> tuple[str, str, str]:
+        configured = metadata.get("contacts", {}).get(tid_str, {})
+        if configured.get("contact"):
+            name = configured["contact"]
+            return (name, "配置通讯对象", name)
+        if tid_str in metadata.get("contacts", {}):
+            return (f"未关联联系人 #{tid_str}", "配置姓名未解析", f"短信配置 #{tid_str}")
         tname = _clean(tm.get(f"Message_{tid_str}_name", ""))
         if tname:
             return (tname, "街区通讯", tname)
@@ -1867,24 +1931,39 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
             return ("录像店熟客", "街区市井", "Random Play 录像店日常沟通")
         return (f"市井联系人 #{tid_str}", "市井日常", f"街区通讯频段 #{tid_str}")
 
-    def _format_msg_line(seq_str: str, text_str: str, raw_str: str, contact_str: str) -> str:
-        is_phaethon = False
-        if "{M#" in raw_str or "{F#" in raw_str:
-            is_phaethon = True
-        elif raw_str.startswith(("[回复]", "回复：", "【回复】")):
-            is_phaethon = True
+    message_audit = unrendered_message_sources
 
+    def _format_msg_line(tid: str, seq_str: str, text_str: str, raw_str: str,
+                         source_key: str, contact_str: str, contact_source: str) -> str:
+        # M/F substitutions encode the recipient's route. They do not establish
+        # who sent the message. A thread contact likewise is not a sender ID.
+        is_reply = raw_str.startswith(("[回复]", "回复：", "【回复】"))
+        identity = source_identity(metadata, source_key)
+        sender = identity["sender"] or ("法厄同（哲 / 铃）" if is_reply else None)
+        configured_contact = metadata.get("contacts", {}).get(tid, {})
+        if configured_contact.get("contact"):
+            contact_str = configured_contact["contact"]
+            contact_source = "message_group_config"
         ct = clean_text(raw_str)
-        if ct.variants and len(ct.variants) > 1 and "M" in ct.variants and "F" in ct.variants:
+        message_audit.append({
+            "source_key": source_key, "thread_id": tid, "sequence": seq_str,
+            "raw_text": raw_str, "text": text_str, "text_variants": ct.variants,
+            "retained": True, "reason": None,
+            "contact_candidate": contact_str, "contact_source": contact_source,
+            "sender": sender, "sender_status": "resolved" if sender else "unresolved",
+            "sender_source": identity["sender_source"] if identity["sender"] else "explicit_reply_marker" if is_reply else "none",
+            "config_references": identity["references"],
+            "contact_evidence": configured_contact or None,
+            "order_source": "source_key", "chronology_status": "unknown",
+        })
+        label = sender or "发送方未关联"
+        if ct.variants and "M" in ct.variants and "F" in ct.variants:
             var_m = ct.variants["M"].replace("\n", " ").strip()
             var_f = ct.variants["F"].replace("\n", " ").strip()
-            return f"> 📱 **[{seq_str}] 法厄同（哲 / 铃）**：哲：「{var_m}」 / 铃：「{var_f}」\n"
-
-        clean_val = text_str.replace("\n", " ").strip()
-        if is_phaethon:
-            return f"> 📱 **[{seq_str}] 法厄同（哲 / 铃）**：{clean_val}\n"
+            body = f"男主路线：「{var_m}」 / 女主路线：「{var_f}」"
         else:
-            return f"> 💬 **[{seq_str}] {contact_str}**：{clean_val}\n"
+            body = text_str.replace("\n", " ").strip()
+        return f"> 💬 **[{seq_str}] {label}**：{body} (`{source_key}`)\n"
 
     # Categorize threads
     agent_threads: dict[int, list[str]] = defaultdict(list)
@@ -1895,6 +1974,9 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
         code = _get_agent_code(tid)
         if code is not None and code in CANONICAL_SMS_AGENTS:
             agent_threads[code].append(tid)
+            continue
+        if tid in metadata.get("contacts", {}):
+            street_threads.append(tid)
             continue
 
         poster = _clean(tm.get(f"Poster_{tid}", ""))
@@ -1910,7 +1992,7 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
 
     msg_md = ["# 绳网私信与手机即时通讯记录\n"]
     msg_md.append(
-        "> 法厄同个人手持终端（敲敲 / Knock Knock）中的短信与私信聊天记录，全量收录代理人日常通讯、专属信托手记、绳网委托人后续跟进、街区市井闲谈与特色多方群聊。\n"
+        "> 法厄同个人手持终端（敲敲 / Knock Knock）中的短信与私信聊天记录，收录代理人日常通讯、专属信托手记、绳网委托人后续跟进、街区市井闲谈与特色多方群聊。通讯对象与逐条发送方优先采用配置中的身份字段；配置缺失、冲突或姓名未解析时保留未知。男女路线文本不用于推断发送方。\n"
     )
 
     # Executive Overview Table
@@ -1998,8 +2080,8 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
                 tname = _clean(tm.get(f"Message_{tid}_name", ""))
                 title = tname if tname else (first_text[:24] + ("..." if len(first_text) > 24 else ""))
                 msg_md.append(f"##### 频段 #{tid} · {title}\n")
-                for seq, text, raw in m_sorted:
-                    msg_md.append(_format_msg_line(seq, text, raw, aname))
+                for seq, text, raw, key in m_sorted:
+                    msg_md.append(_format_msg_line(tid, seq, text, raw, key, aname, "thread_id_rule"))
                     msg_count += 1
                 msg_md.append("---\n")
 
@@ -2019,8 +2101,9 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
                 p_label = f"`{poster}`" if poster else "—"
                 q_label = f"《{quest}》" if quest else "—"
                 msg_md.append(f"> 📋 **委托档案关联**：发帖人 {p_label} ｜ 委托任务 {q_label}\n\n")
-            for seq, text, raw in m_sorted:
-                msg_md.append(_format_msg_line(seq, text, raw, cname))
+            for seq, text, raw, key in m_sorted:
+                msg_md.append(_format_msg_line(tid, seq, text, raw, key, cname,
+                                               "poster_key" if poster else "thread_id_rule"))
                 msg_count += 1
             msg_md.append("---\n")
 
@@ -2033,14 +2116,71 @@ def _extract_interknot(tm: TextMap, knot_dir: Path) -> dict[str, int]:
             cname, id_cat, title = _resolve_street_contact(tid)
             msg_md.append(f"### 频段 #{tid} · {cname} · {title}\n")
             msg_md.append(f"> 🏷️ **通讯类别**：{id_cat}\n\n")
-            for seq, text, raw in m_sorted:
-                msg_md.append(_format_msg_line(seq, text, raw, cname))
+            for seq, text, raw, key in m_sorted:
+                msg_md.append(_format_msg_line(tid, seq, text, raw, key, cname,
+                                               "thread_name" if tm.get(f"Message_{tid}_name") else "thread_id_rule"))
                 msg_count += 1
             msg_md.append("---\n")
 
+    # Configured reply choices, long replies, and attachments use separate
+    # TextMap namespaces. Keep their occurrence identity and branch slots;
+    # numeric config order does not establish a single conversation path.
+    referenced_keys = {row["source_key"] for row in message_audit}
+    extra_sources = []
+    for key, refs in metadata.get("by_source", {}).items():
+        if key in referenced_keys:
+            continue
+        raw = tm.get(key)
+        ct = clean_text(raw)
+        identity = source_identity(metadata, key)
+        extra_sources.append({"source_key": key, "raw_text": raw, "text": ct.text,
+                              "text_variants": ct.variants, "config_references": refs,
+                              "sender": identity["sender"], "sender_status": identity["sender_status"],
+                              "sender_source": identity["sender_source"],
+                              "retained": bool(ct.text), "reason": None if ct.text else "empty_text",
+                              "chronology_status": "unknown"})
+    if extra_sources:
+        extras_by_thread = defaultdict(list)
+        for row in extra_sources:
+            for thread in {ref["thread_id"] for ref in row["config_references"]}:
+                extras_by_thread[thread].append(row)
+        msg_md.append("## 第四辑：配置引用的补充正文、回复与选项\n")
+        msg_md.append("> 按配置来源保留。选项槽位与长回复可能属于不同分支，当前排列不代表连续发送。\n")
+        for thread, thread_sources in sorted(extras_by_thread.items(), key=lambda item: sequence_order(item[0])):
+            contact = metadata.get("contacts", {}).get(thread, {}).get("contact")
+            msg_md.append(f"### 频段 #{thread}" + (f" · {contact}" if contact else "") + "\n")
+            for row in thread_sources:
+                matching = [ref for ref in row["config_references"] if ref["thread_id"] == thread]
+                if not matching:
+                    continue
+                if not row["retained"]:
+                    continue
+                labels = " / ".join(f"{ref['config_id']}:{ref['role']}" for ref in matching)
+                roles = {ref["role"] for ref in matching}
+                kind = "补充短信正文" if roles == {"message"} else "回复/选项候选" if "message" not in roles else "混合引用候选"
+                actor = f"【{row['sender']}】" if row["sender"] else ""
+                msg_md.append(f"- {kind}（{labels}）：{actor}{row['text']} (`{row['source_key']}`)")
+            msg_md.append("")
+    item_sources = {}
+    for item in metadata.get("items", []):
+        for ref in item["references"]:
+            item_sources.setdefault(ref["source_key"], ref)
+    if item_sources:
+        msg_md.append("## 第五辑：短信附件文本\n")
+        for key, ref in sorted(item_sources.items()):
+            if ref["text"]:
+                msg_md.append(f"- {ref['text']} (`{key}`)")
+    write_jsonl(metadata.get("events", []), knot_dir / "message-config-audit.jsonl")
+    write_jsonl(extra_sources, knot_dir / "message-extra-sources.jsonl")
+    write_jsonl(metadata.get("items", []), knot_dir / "message-item-audit.jsonl")
     (knot_dir / "02_绳网私信与手机短信.md").write_text("\n".join(msg_md), encoding="utf-8")
+    write_jsonl(message_audit, knot_dir / "message-audit.jsonl")
 
-    return {"lore_quests": len(consolidated) + len(forum_posts), "lore_messages": msg_count}
+    return {"lore_quests": len(consolidated) + len(forum_posts), "lore_messages": msg_count,
+            "lore_message_sender_unresolved": sum(row["sender_status"] == "unresolved" for row in message_audit),
+            "lore_message_sender_resolved": sum(row["sender_status"] == "resolved" for row in message_audit),
+            "lore_message_config_events": len(metadata.get("events", [])),
+            "lore_message_extra_sources": len(extra_sources), "lore_message_item_sources": len(item_sources)}
 
 
 FILM_COMMENT_GROUPS: dict[int, list[str]] = {
@@ -2530,261 +2670,6 @@ def _extract_glossary(tm: TextMap, gloss_dir: Path) -> dict[str, int]:
     return {"lore_tips": len(tips), "lore_tarots": len(tarots)}
 
 
-def _extract_street(tm: TextMap, street_dir: Path) -> dict[str, int]:
-    street_dir.mkdir(parents=True, exist_ok=True)
-
-    district_configs = [
-        (
-            "01",
-            "六分街（Sixth Street）",
-            "Random Play 录像店门前、锦鲤面馆、盒玩具店、涡轮改装店与 141 便利店",
-            "狡兔屋、面馆乔普师傅、141店员、街坊邻里与录像店顾客",
-            ["Chapter00", "Chapter01", "SixthStreet", "1001_01", "Store", "MainCityStreet"],
-        ),
-        (
-            "02",
-            "光映广场（Lumina Square）",
-            "繁华商业步行街、天桥观景台、HIA 协会大厅、治安局分署、404 Livehouse 与演艺大厅",
-            "HIA调查员、治安官、潮牌店长、逛街市民与演艺乐迷",
-            ["FortuneSquare", "FortuneHIA", "FortuneNEPS", "404ERROR", "Concert", "SuibianTemple", "Hand", "ReverbArena"],
-        ),
-        (
-            "03",
-            "黑雁工地旧址（Brant Street）",
-            "机械施工现场、工友集结地、重机营地、地下管网与废弃站台",
-            "白祇重工工程队、施工工人、机械师与安全监理",
-            ["Chapter02", "BrantStreet", "MegaRobot"],
-        ),
-        (
-            "04",
-            "芭莱大厦前广场（Ballet Twins）",
-            "喷泉广场、双子大厦名流商圈、艺术长廊与高雅观景台",
-            "艺术名流、芭莱双子访客、摄影师与都会名媛",
-            ["Chapter03", "BalletTwins"],
-        ),
-        (
-            "05",
-            "外环·野火镇（Blazewood）",
-            "机车党荒野客栈、外环集市、仙人掌戈壁、加油站与狂飙赛道",
-            "卡吕冬之子、荒野开拓者、机车骑手与集市客商",
-            ["Chapter04", "OuterRing", "Blazewood"],
-        ),
-        (
-            "06",
-            "索恩区·罗斯凯利法（Roscaelifer）",
-            "索恩大都会、历史行政名区、轨道交通枢纽与都会繁华街巷",
-            "大都会通勤族、轻轨乘客、索恩名流与市政公职人员",
-            ["Roscaelifer", "Subway"],
-        ),
-        (
-            "07",
-            "卫非地半岛（Whitfield）",
-            "澄辉坪聚落、辉瓷工坊、索恩海湾海角与泽尼希航天城旧址",
-            "辉瓷手艺人、半岛渔民、海钓客、水手与海湾度假市民",
-            ["Whitfield", "WhitFiled", "HiddenReef", "Port", "UltimateAngler"],
-        ),
-        (
-            "08",
-            "云岿山怪啖街区（Yum Cha Sin）",
-            "随缘道场、古法茶馆、方士集聚地、山门集市与怪啖街坊",
-            "云岿方士、茶客、茶肆掌柜、香客与求道者",
-            ["YumChaSin"],
-        ),
-        (
-            "09",
-            "斯科特哨站（Scott Outpost）",
-            "零号空洞前沿指挥所、防卫军哨所、补给站与调查员集结地",
-            "对空六课前沿哨兵、防卫军军官、资深调查员与物资军需官",
-            ["Zero", "Outpost", "Scott"],
-        ),
-        (
-            "10",
-            "街头邦布众生相（Street Bangboos）",
-            "新艾利都街头巷尾、各商铺门口、工地角落与野生流浪点",
-            "巡警布、建筑布、快递布、招揽布与野生流浪邦布",
-            ["BangBoo", "BangbooUnderGround", "BangbooRabbit"],
-        ),
-    ]
-
-    def match_district(k: str) -> str:
-        k_lower = k.lower()
-        if "bangboo" in k_lower:
-            return "10"
-        for d_id, _, _, _, kw_list in district_configs:
-            if d_id == "10":
-                continue
-            for kw in kw_list:
-                if kw.lower() in k_lower:
-                    return d_id
-        return "11"
-
-    # 1. Parse PasserByChat_
-    chat_dict: dict[str, dict] = {}
-    for k, v in tm.items():
-        if k.startswith("PasserByChat_"):
-            parts = k.split("_")
-            if len(parts) >= 4:
-                prefix = parts[1]
-                conv_id = parts[2]
-                suffix = "_".join(parts[3:])
-                conv_key = f"{prefix}_{conv_id}"
-                if conv_key not in chat_dict:
-                    chat_dict[conv_key] = {"prefix": prefix, "id": conv_id, "dialogues": [], "names": {}}
-                if suffix.startswith("Name"):
-                    cleaned_name = _clean(v)
-                    if cleaned_name:
-                        chat_dict[conv_key]["names"][suffix] = cleaned_name
-                else:
-                    cleaned_text = _clean(v)
-                    if cleaned_text and len(cleaned_text) > 1 and not cleaned_text.startswith("LAYOUT"):
-                        chat_dict[conv_key]["dialogues"].append((suffix, cleaned_text))
-
-    chats_by_dist: dict[str, list[dict]] = {d[0]: [] for d in district_configs}
-    chats_by_dist["11"] = []
-
-    total_chat_lines = 0
-    for conv_key, cdata in chat_dict.items():
-        cdata["dialogues"].sort(key=lambda x: x[0])
-        cleaned_dialogues = []
-        seen_seq = set()
-        for seq, text in cdata["dialogues"]:
-            base_seq = seq.rstrip("FMfm")
-            if base_seq in seen_seq:
-                continue
-            seen_seq.add(base_seq)
-            cleaned_dialogues.append((seq, text))
-        cdata["dialogues"] = cleaned_dialogues
-        if cleaned_dialogues:
-            total_chat_lines += len(cleaned_dialogues)
-            dist_id = match_district(conv_key)
-            chats_by_dist[dist_id].append(cdata)
-
-    for dist_id in chats_by_dist:
-        chats_by_dist[dist_id].sort(key=lambda x: (x["prefix"], x["id"]))
-
-    # 2. Parse Bubbles
-    bubbles_by_dist: dict[str, list[tuple[str, str]]] = {d[0]: [] for d in district_configs}
-    bubbles_by_dist["11"] = []
-    all_bubble_texts: set[str] = set()
-
-    for k, v in tm.items():
-        is_bubble = (
-            k.startswith("PasserBy_BubbleStory_")
-            or k.startswith("PasserBy_Bubble_")
-            or k.startswith("PasserByBubble_")
-            or k.startswith("PasserBy_BubbleNpc_")
-            or k.startswith("BubbleByChat_")
-            or k.startswith("StoreBubble_")
-            or ("Bubble" in k and "PasserBy" in k)
-        )
-        if is_bubble and not k.startswith("PasserByChat_"):
-            cleaned = _clean(v)
-            if cleaned and len(cleaned) > 5 and not cleaned.startswith("LAYOUT"):
-                if cleaned not in all_bubble_texts:
-                    all_bubble_texts.add(cleaned)
-                    dist_id = match_district(k)
-                    bubbles_by_dist[dist_id].append((k, cleaned))
-
-    for dist_id in bubbles_by_dist:
-        bubbles_by_dist[dist_id].sort(key=lambda x: x[0])
-
-    # 3. Generate Markdown
-    s_md: list[str] = [
-        "# 新艾利都市井众生相与街区传闻全集\n",
-        "> 本文献库全景收录新艾利都各大生活街区、商业步行街、工业营地、外环荒野与前沿哨所的全部市民闲聊、情境对话与漫步环境气泡。严格按新艾利都 10 大核心地标街区及都会特别区域划篇归档，保序排列。\n",
-        "## 🏙️ 新艾利都全景街区众生相速查总览表\n",
-        "| 序号 | 街区 / 场景代号 | 核心地标与市井风貌 | 核心对话主体 | 市井逸闻收录数 |",
-        "|:---:|:---|:---|:---|:---:|",
-    ]
-
-    for dist_id, dist_name, dist_desc, dist_actors, _ in district_configs:
-        n_chats = len(chats_by_dist[dist_id])
-        n_clines = sum(len(c["dialogues"]) for c in chats_by_dist[dist_id])
-        n_bubbles = len(bubbles_by_dist[dist_id])
-        total_d = n_clines + n_bubbles
-        if n_chats > 0 and n_bubbles > 0:
-            count_str = f"**{total_d:,}** 条（情境对话 {n_chats} 组 / 环境气泡 {n_bubbles:,} 条）"
-        elif n_chats > 0:
-            count_str = f"**{total_d:,}** 条（情境对话 {n_chats} 组）"
-        else:
-            count_str = f"**{total_d:,}** 条（环境气泡 {n_bubbles:,} 条）"
-        s_md.append(f"| {dist_id} | {dist_name} | {dist_desc} | {dist_actors} | {count_str} |")
-
-    c11 = len(chats_by_dist["11"])
-    clines11 = sum(len(c["dialogues"]) for c in chats_by_dist["11"])
-    b11 = len(bubbles_by_dist["11"])
-    total_11 = clines11 + b11
-    if total_11 > 0:
-        count_str_11 = f"**{total_11:,}** 条（情境对话 {c11} 组 / 环境气泡 {b11:,} 条）" if c11 > 0 else f"**{total_11:,}** 条（环境气泡 {b11:,} 条）"
-        s_md.append(f"| 11 | 都会特别展演、庆典赛事与市井杂咏 | 都会特别巡游舞台、节日庆典广场与街头即兴秀场 | 庆典游客、即兴街头艺人与都会闲逛者 | {count_str_11} |")
-
-    s_md.append("\n---\n")
-
-    # Detailed sections
-    for dist_id, dist_name, dist_desc, dist_actors, _ in district_configs:
-        chats = chats_by_dist[dist_id]
-        bubbles = bubbles_by_dist[dist_id]
-        if not chats and not bubbles:
-            continue
-
-        s_md.append(f"## 第 {dist_id} 卷 · {dist_name}\n")
-        s_md.append(f"> **街区定位**：{dist_desc}。  \n> **核心对话主体**：{dist_actors}。\n")
-
-        if chats:
-            s_md.append("### 一、街区情境对话与市井逸事\n")
-            for cdata in chats:
-                names_list = list(cdata["names"].values())
-                if names_list:
-                    speakers_str = "、".join(names_list)
-                    topic = f"{speakers_str} 的街头见闻"
-                else:
-                    speakers_str = "街坊市民 / 过路行人"
-                    topic = "街角琐语与邻里闲谈"
-
-                s_md.append(f"#### 📍 逸事 {cdata['prefix']}_{cdata['id']} · {topic}\n")
-                s_md.append(f"- 👥 **登场主体 / 闲聊街坊**：{speakers_str}")
-                s_md.append("- 💬 **情境对话实录**：")
-                for idx, (_, text) in enumerate(cdata["dialogues"], 1):
-                    s_md.append(f"  {idx}. {text}")
-                s_md.append("\n---\n")
-
-        if bubbles:
-            section_title = "### 二、街头漫步环境气泡与路人闲言\n" if chats else "### 街头漫步环境气泡与路人闲言\n"
-            s_md.append(section_title)
-            for _, b_text in bubbles:
-                s_md.append(f"- 🗣️ {b_text}")
-            s_md.append("\n---\n")
-
-    if total_11 > 0:
-        chats_11 = chats_by_dist["11"]
-        bubbles_11 = bubbles_by_dist["11"]
-        s_md.append("## 第 11 卷 · 都会特别展演、庆典赛事与市井杂咏\n")
-        s_md.append("> **街区定位**：都会特别巡游舞台、节日庆典广场与街头即兴秀场。  \n> **核心对话主体**：庆典游客、即兴街头艺人与都会闲逛者。\n")
-        if chats_11:
-            s_md.append("### 一、街区情境对话与市井逸事\n")
-            for cdata in chats_11:
-                names_list = list(cdata["names"].values())
-                speakers_str = "、".join(names_list) if names_list else "街坊市民 / 过路行人"
-                topic = f"{speakers_str} 的街头见闻" if names_list else "街角琐语与邻里闲谈"
-                s_md.append(f"#### 📍 逸事 {cdata['prefix']}_{cdata['id']} · {topic}\n")
-                s_md.append(f"- 👥 **登场主体 / 闲聊街坊**：{speakers_str}")
-                s_md.append("- 💬 **情境对话实录**：")
-                for idx, (_, text) in enumerate(cdata["dialogues"], 1):
-                    s_md.append(f"  {idx}. {text}")
-                s_md.append("\n---\n")
-        if bubbles_11:
-            section_title = "### 二、街头漫步环境气泡与路人闲言\n" if chats_11 else "### 街头漫步环境气泡与路人闲言\n"
-            s_md.append(section_title)
-            for _, b_text in bubbles_11:
-                s_md.append(f"- 🗣️ {b_text}")
-            s_md.append("\n---\n")
-
-    (street_dir / "01_街区路人与市井闲聊.md").write_text("\n".join(s_md), encoding="utf-8")
-
-    total_extracted_lines = total_chat_lines + len(all_bubble_texts)
-    return {"lore_street_lines": total_extracted_lines}
-
-
 def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
     lines = [
         "# 绝区零（ZZZ）全量世界观与设定文献库\n",
@@ -2792,6 +2677,7 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "## 目录导览\n",
         "### 1. 代理人全景与身世秘史 (`lore/agents/`)",
         f"- [00_代理人全景总览](agents/00_代理人全景总览.md)：收录 {stats.get('lore_agents', 0)} 位代理人基本资料总览汇总表",
+        f"- [未关联代理人互动](agents/13_未关联代理人互动.md)：保留 {stats.get('lore_dialogue_unassigned', 0)} 条尚未关联档案的候选",
         "- [01_狡兔屋](agents/01_狡兔屋.md)：安比、猫又、妮可、比利、星徽·比利",
         "- [02_白祇重工](agents/02_白祇重工.md)：珂蕾妲、安东、本、格莉丝",
         "- [03_维多利亚家政](agents/03_维多利亚家政.md)：可琳、莱卡恩、丽娜、艾莲",
@@ -2821,6 +2707,8 @@ def _generate_lore_index(lore_dir: Path, stats: dict[str, int]) -> None:
         "- [01_街区路人与市井闲聊](street/01_街区路人与市井闲聊.md)：全 10 大核心地标街区（六分街、光映广场、黑雁工地、芭莱大厦、野火镇、索恩区、卫非地半岛、云岿山、斯科特哨站与街头邦布）全量市井逸事对话与漫步环境气泡全集\n",
         "## 统计概要\n",
         f"- **收录代理人**：{stats.get('lore_agents', 0)} 位",
+        f"- **互动候选**：{stats.get('lore_dialogue_candidates', 0)} 条；所有来源与路线去向见 agents/dialogue-audit.jsonl",
+        "- **短信来源与发送方证据**：见 interknot/message-audit.jsonl",
         f"- **收录驱动盘唱片**：{stats.get('lore_discs', 0)} 套",
         f"- **收录音擎装备**：{stats.get('lore_w_engines', 0)} 款",
         f"- **收录邦布图鉴**：{stats.get('lore_bangboos', 0)} 只",

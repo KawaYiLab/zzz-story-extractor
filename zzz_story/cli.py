@@ -29,7 +29,9 @@ from .fetch import (
     read_json,
 )
 from .lore import extract_lore
+from .partner_dialogue import PARTNER_DIALOGUE_PREFIXES
 from .speakers import build_speaker_index
+from .street_dialogue import STREET_DIALOGUE_PREFIXES
 from .textmap import load_text_map
 from .upload import UploadError, build_bundle, encode_bundle, upload
 from .validate import validate_output
@@ -303,12 +305,13 @@ def main(argv: list[str] | None = None) -> int:
             avatar_base = read_json(avatar_path) if avatar_path and avatar_path.exists() else None
             speaker_index, _ = build_speaker_index(
                 text_map=text_map,
-                text_keys={key for key in text_map.keys() if key.startswith(("PartnerTalk_", "Chat_PartnerTalk_"))},
+                text_keys={key for key in text_map.keys() if key.startswith(PARTNER_DIALOGUE_PREFIXES + STREET_DIALOGUE_PREFIXES)},
                 data_paths=data_paths, game_dir=detect_game_dir(args.game_dir),
                 cache_path=_cache_root(args.data_dir, args.lang) / "speakers_cache.json",
                 no_speakers=args.no_speakers,
             )
-            stats = extract_lore(text_map, avatar_base, out, speaker_index=speaker_index, accuracy_first=args.accuracy_first)
+            stats = extract_lore(text_map, avatar_base, out, speaker_index=speaker_index,
+                                 accuracy_first=args.accuracy_first, data_paths=data_paths)
             print("")
             print("Worldbuilding lore extraction completed successfully!")
             print(f"  agents: {stats.get('lore_agents', 0)}")

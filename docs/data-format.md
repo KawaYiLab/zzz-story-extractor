@@ -93,10 +93,14 @@
 
 ## 补充文本与设定
 
-- `Comic_*` 使用 `context_status=unlinked`，尚无可靠的场景或播放关联，每条独立展示来源。
+- `Comic_*` 经 ComicConfig 的外部 CAB/PPtr、Timeline 轨道及 BubbleEvent UUID 确认后使用 `context_status=resource_linked`；`comic_context` 保留资源、漫画名、时间轴、marker 时间及显示名。未确认者仍为 `unlinked`。这些字段只表示局部资源关系，不确认主线章节或跨场景顺序，每条继续独立展示来源。
 - `CS_*` 使用 `context_status=chapter_only`，只确认所属章节。季章 token 通过与正文相同的规则推导，避免章节改号后跨季挂载。
 - 补充文本 ID 为 `SUP_<source_key>`，新增条目不会重编号。旧 `SUP00001` 等编号应通过来源键迁移。
-- `lore/` 导出设定 Markdown；代理人互动的 `lore/agents/dialogue-audit.jsonl` 保留来源键、原文、角色、资源证据与路线去向。
+- `lore/` 导出设定 Markdown；代理人互动的 `lore/agents/dialogue-audit.jsonl` 保留来源键、原文、角色、资源证据与路线去向，无法确定档案归属者同时进入 `unassigned-dialogue.jsonl` 和独立 Markdown。
+- 街头互动的 `lore/street/dialogue-audit.jsonl` 保留短句、同文不同来源及未确认分支；`metadata-audit.jsonl` 保留姓名、事件名和交互标题，它们不作为对白。
+- 短信的 `lore/interknot/message-audit.jsonl` 保留逐条来源与配置确认的发送方；`message-config-audit.jsonl` 保留每次配置事件及所有文本/选项引用；`message-extra-sources.jsonl` 补出选项、长回复与其他配置正文；`message-item-audit.jsonl` 保留附件文本来源。联系人与发送方分开，零 ID、冲突和缺失姓名仍为未知。
+- `source-variants.jsonl` 记录 `_Gender` 等已支持的辅助来源键，对基础正文附加 `source_variants`，不将等价原文虚构为第二次播放。`source-gaps.jsonl` 记录空主线来源及独立 EN 原文是否存在，不替换中文正文。
+- `supplement-context-report.json` 记录漫画配置扫描和关联统计及缺失资源；缓存资源解析成功不证明所有节点在运行时播放。
 
 ## 活动、支线与代理人故事
 
@@ -144,4 +148,4 @@ Season 1 的过场演出使用不带 `Main_` 前缀的 `GalGame_Chapter<数字>_
 - `quality` 包含档案覆盖、任务关联和未关联漫画数量。
 - `validation` 记录错误、警告和逐项问题，包括重复/缺失 ID、空正文、章节标签冲突、补充文本跨季挂载及占位说明署名。
 
-所有覆盖率与结构检查均针对提取候选及已读取资源。恢复真实分支播放、跨场景顺序和漫画关联仍需要额外的演出执行证据或游戏实录。
+所有覆盖率与结构检查均针对提取候选及已读取资源。恢复真实分支播放、跨场景顺序及尚未关联的漫画仍需要额外的演出执行证据或游戏实录。

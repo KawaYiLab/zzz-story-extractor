@@ -37,6 +37,8 @@ class Graph:
     conditions: int = 0
     occurrences: dict[str, list[dict]] = field(default_factory=dict)
     options: set[str] = field(default_factory=set)
+    status: str = "complete"
+    null_nodes: list[tuple[int, int]] = field(default_factory=list)
 
 
 NARRATION_NODES = {"GalSubNarratorNode", "GalSwitchSceneNode", "GalWhiteSwitchSceneNode",
@@ -61,11 +63,20 @@ def graph_from_raw(raw: bytes) -> Graph:
     roots = [e.value for e in entries if e.name == "storySections"]
     if len(roots) != 1:
         raise OdinError("missing/ambiguous storySections")
+    # Saved empty/stub assets explicitly serialize null rather than a list.
+    # This describes the configured object only, not the absence of dialogue
+    # in another resource or runtime entry.
+    if roots[0] is None:
+        return Graph(name, status="empty")
     sections = [sequence(s) for s in sequence(roots[0])]
     nodes = {}
     following = {}
+    null_nodes = []
     for section_idx, section in enumerate(sections):
         for sub_idx, node in enumerate(section):
+            if node is None:
+                null_nodes.append((section_idx, sub_idx))
+                continue
             if not isinstance(node, Node):
                 raise OdinError("expected playable node")
             # MainCityChat nodes use array positions and omit address fields.
@@ -74,9 +85,9 @@ def graph_from_raw(raw: bytes) -> Graph:
                 raise OdinError("node address does not match section array")
             address = (section_idx, sub_idx)
             nodes[address] = node
-            if sub_idx + 1 < len(section):
+            if sub_idx + 1 < len(section) and isinstance(section[sub_idx + 1], Node):
                 following[address] = (section_idx, sub_idx + 1)
-    graph = Graph(name)
+    graph = Graph(name, status="partial" if null_nodes else "complete", null_nodes=null_nodes)
     occurrences = {}
     arm_occurrences = {}
 
@@ -90,6 +101,7 @@ def graph_from_raw(raw: bytes) -> Graph:
             occurrences.setdefault(key, set()).add(address)
         for child, text_field, key in _text_fields(node):
             kind = (child.type_name or "").split(",")[0].rsplit(".", 1)[-1]
+            parent_kind = (node.type_name or "").split(",")[0].rsplit(".", 1)[-1]
             avatar = child.get("avatarName") or child.get("NpcName")
             voices = [child.get(field) for field in ("voiceKey", "externalVoiceKey", "Voice", "ExternalVoiceKey")]
             voices = sorted({voice for voice in voices if isinstance(voice, str) and voice
@@ -104,9 +116,14 @@ def graph_from_raw(raw: bytes) -> Graph:
             binding = {field: cfg.get(field) for field in ("SpeakerSubID", "SpeakerNpcTag", "SpeakerMember")} if isinstance(cfg, Node) else {}
             graph.occurrences.setdefault(key, []).append({
                 "section": address[0], "node": address[1], "node_type": kind,
+                "parent_node_type": parent_kind,
                 "text_field": text_field, "avatar": avatar or None,
                 "voice_keys": voices, "is_option": is_option,
-                "is_narration": kind in NARRATION_NODES,
+                # This nested field is transition/screen text, not an actor
+                # display. Keep both the config and playable parent type.
+                "is_narration": kind in NARRATION_NODES or (
+                    parent_kind == "MainCityChatTransitionWithActionsNode"
+                    and kind == "TransitionWithActionsCfg" and text_field == "DialogueKey"),
                 "hide_name": child.get("hideAvatarName") is True,
                 "speaker_slot": child.get("Speaker"),
                 "actor_id": child.get("actorId", child.get("avatarId")),
@@ -171,7 +188,7 @@ def graph_from_raw(raw: bytes) -> Graph:
     return graph
 
 
-def graphs_from_cab(cab: bytes, wanted: dict[str, str]) -> dict[str, Graph]:
+def graphs_from_cab(cab: bytes, wanted: dict[str, str], *, errors: dict[str, str] | None = None) -> dict[str, Graph]:
     """Resolve exact configured assets by AssetBundle container hash and PPtr."""
     import UnityPy
 
@@ -185,10 +202,15 @@ def graphs_from_cab(cab: bytes, wanted: dict[str, str]) -> dict[str, Graph]:
             path = wanted.get(key)
             if path is None or info.asset.m_FileID != 0:
                 continue
-            target = objects.get(info.asset.m_PathID)
-            if target is None or target.class_id != 114:
-                raise OdinError("configured asset has no MonoBehaviour")
-            result[path] = graph_from_raw(target.get_raw_data())
+            try:
+                target = objects.get(info.asset.m_PathID)
+                if target is None or target.class_id != 114:
+                    raise OdinError("configured asset has no MonoBehaviour")
+                result[path] = graph_from_raw(target.get_raw_data())
+            except (ValueError, KeyError, UnicodeDecodeError) as exc:
+                if errors is None:
+                    raise
+                errors[path] = str(exc)
     return result
 
 
@@ -254,7 +276,7 @@ def link_unused_copies(links: dict[str, dict], graphs: dict[str, Graph], routes:
         if len(assets) != 1:
             continue
         path = next(iter(assets))
-        if routes.get(path) != {"M", "F"} or graphs[path].name != prefix:
+        if routes.get(path) != {"M", "F"} or graphs[path].name != prefix or graphs[path].status != "complete":
             continue
         copies = {}
         for n, key in missing.items():
