@@ -96,7 +96,7 @@ python -m venv .venv
 | `story.csv` | 可选 CSV，包含逐行字段与 JSON 编码的证据 |
 | `supplement.jsonl` / `supplement.txt` | Comic/CS 补充文本，有候选且启用对应格式时生成 |
 | `extra.jsonl` / `extra.txt` | 活动剧情、支线委托、代理人故事、空洞事件等主线外剧情 |
-| `extra-discarded.jsonl` | 主线外剧情的女主副本与相邻同文删减记录 |
+| `extra-discarded.jsonl` | 主线外剧情的显式女主分支、已验证副本及来源证据 |
 | `content-coverage.json` | 各内容域键数、字数及未登记的对白类键族 |
 | `manifest.json` / `coverage.json` | 输入哈希、版本、章节、计数、覆盖率及校验结果 |
 | `discarded.jsonl` | 删减候选的原文、来源键、原因与配对证据；完整性模式为空 |
@@ -120,7 +120,7 @@ python -m venv .venv
 # 将同一份输入、同一筛选范围的默认输出与完整性输出对账
 .\.venv\Scripts\python.exe scripts\check_corpus_integrity.py --output out\zzz_story_3.3.0_chs --audit out\audit
 
-# 检查相邻同文、残留标记及 JSONL/TXT/CSV/分章一致性，写入质量报告
+# 检查主线、补充和主线外的同文、重复段落、残留标记及导出一致性
 .\.venv\Scripts\python.exe -m zzz_story.content_audit --output out\zzz_story_3.3.0_chs
 
 # 统计 TextMap 各内容域并列出未登记的对白类键族（只需下载数据）
@@ -150,6 +150,8 @@ python -m venv .venv
 - 活动、支线、代理人故事、空洞事件写入 `extra.jsonl`（见[数据格式说明](docs/data-format.md#活动支线与代理人故事)），按来源表分组，活动与支线按游戏内标题推断中文名（查不到时保留内部标签），没有任务或播放顺序关联；未接入游戏资源时大多没有逐句说话人。设定及代理人互动单独写入 `lore/`。
 - 键族归属由 `zzz_story/content.py` 统一登记；`content-coverage.json` 和 `coverage` 命令列出未登记的对白类键族，版本更新后先检查一次。
 - 默认偏向男主视角，有明确证据的分支或副本移入删减审计；无法确认的重复与 NPC 台词继续保留。需要双方候选时使用 `--accuracy-first`。
+- 活动、支线等 Chat/Bubble 演出共用结构化解析器；正文保留分支与节点证据。相邻同文、字幕称呼差异不会单独触发删减；连续三行及以上的重复段落进入质量报告供核对。
+- 多语言按“中文基础 → 中文覆盖 → 目标语言基础 → 目标语言覆盖”加载，防止中文热修覆盖译文。清洗支持嵌套布局/性别标记、换行与注音；注音显示为“正文（注音）”，原文继续保留。
 - 原显示名优先于配音别名，隐藏身份不被提前揭示；无法可靠关联的角色保留为空。`line_type=unknown` 不等于“有配音但别名缺失”，覆盖率仅对关联配音的保留行计算。
 - 章节内以内容类型、回放档案或来源编号排列，当前跨场景 `chronology_status` 为 `unknown`。局部时间排序只用于证据完整且唯一的单资源、单 section 气泡组。
 - Comic 可通过 ComicConfig、外部 CAB/PPtr、所属 Timeline 和 BubbleEvent UUID 确认漫画资源与显示名；缺引用者保留未知。CS 只确认章节关系。它们独立输出，跨场景顺序仍未还原。
@@ -174,13 +176,14 @@ git diff --check
 | `fetch.py`、`textmap.py`、`keys.py`、`chapters.py`、`clean.py` | 数据来源、键解析、章节与文本清洗 |
 | `catalog.py`、`mhy1.py`、`odin.py`、`perform*.py`、`timeline.py` | 资源索引、解码、演出节点与时间轴 |
 | `speakers.py`、`narrative.py` | 角色归因、内容分类和局部顺序证据 |
-| `content.py`、`extras.py` | 键族登记表与覆盖统计、主线外剧情提取 |
+| `content.py`、`extras.py`、`dedupe.py` | 键族登记、主线外剧情、共用分支筛选与删减来源追溯 |
 | `lore.py`、`writers.py`、`validate.py`、`content_audit.py` | 设定、导出与质量核查 |
 | `diff.py`、`upload.py` | 版本对比与语料打包上传 |
 | `tests/`、`scripts/`、`reference/` | 回归测试、辅助脚本与算法参考 |
 
 审查证据与历史统计：
 
+- [GitHub 实现对照与提取质量改进](docs/extraction-quality-2026-11-04.md)
 - [内容覆盖检查：主线外剧情与第一季过场](docs/content-coverage-review-2026-10-24.md)
 - [主线架构检查及后续场景复核](docs/mainline-architecture-review-2026-10-21.md)
 - [3.3 全量内容复查](docs/full-content-review-2026-10-21.md)

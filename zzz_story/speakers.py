@@ -18,6 +18,7 @@ from .catalog import (
     story_asset_paths,
 )
 from .clean import clean_text
+from .content import EXTRA_DOMAINS, classify_key
 from .fetch import read_game_version, read_json, sha256_file
 from .partner_dialogue import PARTNER_DIALOGUE_PREFIXES
 from .perform import scan_perform_blocks
@@ -26,7 +27,7 @@ from .street_dialogue import STREET_DIALOGUE_PREFIXES
 from .textmap import load_language_map
 from .timeline import VOICE_RE, link_main_copies, scan_timeline_clips
 
-CACHE_VERSION = 9
+CACHE_VERSION = 10
 
 _TIPS_VOICE_RE = re.compile(r"^[A-Za-z]+_Chapter\w+_([A-Za-z]+)_\d+_\d+$")
 _TIPS_NAME_IGNORE = {"选项", "玩家选项", "旁白"}
@@ -522,7 +523,7 @@ def _speaker_fingerprint(text_map, alias_map: dict[str, str], perform_path: Path
         "aliases": sorted(alias_map.items()),
         "resolver": {name: sha256_file(Path(__file__).with_name(name))
                      for name in ("speakers.py", "perform.py", "catalog.py", "mhy1.py", "timeline.py", "odin.py",
-                                  "perform_graph.py", "partner_dialogue.py", "street_dialogue.py")},
+                                  "perform_graph.py", "partner_dialogue.py", "street_dialogue.py", "clean.py", "content.py")},
         "game": str(game_dir.resolve()),
         "game_version": read_game_version(game_dir),
         "blocks": inventory,
@@ -587,12 +588,8 @@ def _perform_speakers(
         print("warning: no Perform blocks found; continuing without per-line speakers")
         return {}, set()
 
-    # Agent interactions and street dialogue share the same typed node reader.
-    # Only configured assets are selected; unrelated event/side assets remain
-    # outside the exported scope unless they were already GalGame sources.
     routes = {path: sides for path, sides in configured_routes(perform_payload).items()
-              if "/Data/GalGame/" in path or Path(path).stem.startswith(
-                  ("Main_", "MainChat_") + PARTNER_DIALOGUE_PREFIXES + STREET_DIALOGUE_PREFIXES)}
+              if _exported_asset(path)}
     source_to_text, avatar_to_text, option_keys, scan_stats = scan_perform_blocks(block_paths, set(routes))
     stats.links = scan_stats.links
     stats.sources = scan_stats.sources
@@ -710,6 +707,17 @@ def _perform_speakers(
     return speakers, option_keys
 
 
+def _exported_asset(path: str) -> bool:
+    stem = Path(path).stem
+    if "/Data/GalGame/" in path or stem.startswith(
+            ("Main_", "MainChat_") + PARTNER_DIALOGUE_PREFIXES + STREET_DIALOGUE_PREFIXES):
+        return True
+    # Configured scene asset names omit the line suffix. Use the content
+    # registry so activity/side/agent Chat and Bubble resources share coverage.
+    parsed = classify_key(stem + "_01")
+    return parsed is not None and parsed.domain in EXTRA_DOMAINS
+
+
 def _index_from_speakers(
     speakers: dict[str, SpeakerInfo],
     text_keys: set[str],
@@ -717,7 +725,7 @@ def _index_from_speakers(
     options: set[str] | None = None,
 ) -> "SpeakerIndex":
     normalized = _normalized_key_index(text_keys)
-    key_info: dict[str, SpeakerInfo] = {}
+    matches: dict[str, list[tuple[tuple, str, SpeakerInfo]]] = {}
     for text_id, info in speakers.items():
         candidates = [text_id]
         if not text_id.startswith("Main_"):
@@ -729,12 +737,19 @@ def _index_from_speakers(
             key = normalized.get(canonical_text_id(text_id))
         if key is None:
             continue
-        previous = key_info.get(key)
-        if previous is None or (info.confidence, info.speaker or "") > (
-            previous.confidence,
-            previous.speaker or "",
-        ):
-            key_info[key] = info
+        rank = (2 if text_id == key else 1 if key in candidates else 0,
+                int(bool(info.perform or info.timeline)), info.confidence)
+        matches.setdefault(key, []).append((rank, text_id, info))
+    key_info = {}
+    for key, values in matches.items():
+        best = max(rank for rank, _, _ in values)
+        peers = sorted((text_id, info) for rank, text_id, info in values if rank == best)
+        names = {info.speaker for _, info in peers if info.speaker}
+        if len(names) > 1:
+            key_info[key] = SpeakerInfo(None, None, 0.0, "conflict", any(info.has_voice for _, info in peers))
+            stats.ambiguous += 1
+        else:
+            key_info[key] = peers[0][1]
     stats.mapped_keys = len(key_info)
     return SpeakerIndex(key_info, stats, options)
 

@@ -26,12 +26,12 @@ def check(output: Path, audit: Path) -> dict:
     manifests = [json.loads((directory / "manifest.json").read_text(encoding="utf-8")) for directory in (output, audit)]
     require(manifests[0].get("accuracy_first") is False and manifests[1].get("accuracy_first") is True,
             "必须分别提供默认输出与完整性输出")
-    for key in ("language", "files", "chapter_filter", "limit", "include_supplement"):
+    for key in ("language", "files", "chapter_filter", "limit", "include_supplement", "include_extra"):
         require(manifests[0].get(key) == manifests[1].get(key), f"两次输入/范围不同：{key}")
     require(bool(manifests[0].get("files")), "manifest 必须保留输入文件哈希")
-    retained = rows(output / "story.jsonl") + rows(output / "supplement.jsonl", optional=True)
-    candidates = rows(audit / "story.jsonl") + rows(audit / "supplement.jsonl", optional=True)
-    removed = rows(output / "discarded.jsonl")
+    retained = rows(output / "story.jsonl") + rows(output / "supplement.jsonl", optional=True) + rows(output / "extra.jsonl", optional=True)
+    candidates = rows(audit / "story.jsonl") + rows(audit / "supplement.jsonl", optional=True) + rows(audit / "extra.jsonl", optional=True)
+    removed = rows(output / "discarded.jsonl") + rows(output / "extra-discarded.jsonl", optional=True)
     candidate_keys = Counter(row["source_key"] for row in candidates)
     retained_keys = Counter(row["source_key"] for row in retained)
     removed_lines = [row for row in removed if row.get("record_kind", "line") == "line"]
@@ -46,7 +46,7 @@ def check(output: Path, audit: Path) -> dict:
         require(raw_text(row) == raw_text(originals[row["source_key"]]), f"原文不一致：{row['source_key']}")
     for row in removed_lines:
         require(bool(row.get("reason")) and bool(row.get("raw_text")), row["source_key"])
-        require(row.get("paired_source_key") in candidate_keys and row.get("paired_source_key") != row["source_key"],
+        require(row.get("paired_source_key") in retained_keys and row.get("paired_source_key") != row["source_key"],
                 f"配对来源无效：{row['source_key']}")
     for row in retained:
         require(row["line_id"] == originals[row["source_key"]]["line_id"], f"稳定 ID 漂移：{row['source_key']}")
@@ -60,6 +60,7 @@ def check(output: Path, audit: Path) -> dict:
         require(key in names and row.get("paired_source_key") in names, f"姓名候选缺失：{key}")
         require(raw_text(row) == raw_text(names[key]) and bool(row.get("reason")), f"姓名原文/原因无效：{key}")
     require(not rows(audit / "discarded.jsonl"), "完整性模式不应删减")
+    require(not rows(audit / "extra-discarded.jsonl", optional=True), "完整性模式不应删减主线外剧情")
     result = {"candidates": len(candidates), "retained": len(retained), "removed_lines": len(removed_lines), "removed_names": len(removed) - len(removed_lines)}
     for filename, label in (("source-variants.jsonl", "source_variants"), ("source-gaps.jsonl", "source_gaps")):
         default_sources = rows(output / filename, optional=True)

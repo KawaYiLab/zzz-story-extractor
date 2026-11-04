@@ -43,3 +43,21 @@ def test_unknown_chapter_is_only_a_warning():
 def test_validate_output_reports_missing_directory(tmp_path):
     issues = validate_output(tmp_path / "missing")
     assert [issue.code for issue in issues] == ["missing-output"]
+
+
+def test_validate_extras_and_discard_references():
+    story = [{**_line("s", "Chapter210", "第三季"), "source_key": "s"}]
+    extra = [{"source_key": "e", "line_id": "e", "chapter": "activity.Fest", "text": "正文"}]
+    removed = [{"source_key": "old", "paired_source_key": "e", "raw_text": "旧文", "reason": "copy"}]
+    assert validate_records(story, extras=extra, discarded=removed) == []
+    extra[0]["line_id"] = "s"
+    extra[0]["text"] = ""
+    removed[0]["paired_source_key"] = "missing"
+    assert {i.code for i in validate_records(story, extras=extra, discarded=removed)} == {
+        "duplicate-line-id", "empty-text", "discard-pair"}
+
+
+def test_validate_rejects_retained_and_discarded_overlap():
+    story = [{**_line("s", "Chapter210", "第三季"), "source_key": "s"}]
+    removed = [{"source_key": "s", "paired_source_key": "s", "raw_text": "台词", "reason": "copy"}]
+    assert "discard-overlap" in {i.code for i in validate_records(story, discarded=removed)}

@@ -77,7 +77,7 @@ def _index(entries: dict[str, SpeakerInfo]) -> SpeakerIndex:
     return SpeakerIndex(entries, SpeakerStats())
 
 
-def test_extract_extras_groups_dedupes_and_attributes():
+def test_extract_extras_groups_attributes_and_preserves_unproven_repetitions():
     text_map = TextMap({
         "Activity_GalGame_Fest_10161201_001": "欢迎光临。",
         "Activity_GalGame_Fest_10161201_002": "{M#哥哥}{F#妹妹}，来了啊。",
@@ -98,6 +98,7 @@ def test_extract_extras_groups_dedupes_and_attributes():
         "Activity_GalGame_Fest_10161201_001",
         "Activity_GalGame_Fest_10161201_002",
         "Activity_GalGame_Fest_10161201_003",
+        "Activity_GalGame_Fest_10161201_004",
         "Side_Chat_Zenkov_226023006_01",
         "GalGame_ChapterMana_01_05_Option1_01",
         "AutoEvent100000_29",
@@ -107,13 +108,13 @@ def test_extract_extras_groups_dedupes_and_attributes():
         "activity", "activity.Fest", "店员", "dialogue")
     assert first["scene_speakers"] == ["店员"]
     assert records[1]["text"] == "哥哥，来了啊。"
-    assert records[4]["line_type"] == "option"
-    assert (records[5]["speaker"], records[5]["speaker_source"]) == ("安比", "inline")
-    assert {row["reason"] for row in discarded} == {"explicit_gender_variant", "adjacent_duplicate"}
-    assert stats.by_domain == {"activity": 3, "side": 1, "companion": 1, "hollow": 1}
+    assert records[5]["line_type"] == "option"
+    assert (records[6]["speaker"], records[6]["speaker_source"]) == ("安比", "inline")
+    assert {row["reason"] for row in discarded} == {"explicit_gender_variant"}
+    assert stats.by_domain == {"activity": 4, "side": 1, "companion": 1, "hollow": 1}
     orders = [row["chapter_order"] for row in records]
     assert orders == sorted(orders) and orders[0] >= 1_000_000
-    assert [row["order"] for row in records] == list(range(1, 7))
+    assert [row["order"] for row in records] == list(range(1, 8))
 
     text = render_extra_txt(records)
     assert "## 活动剧情" in text and "店员：欢迎光临。" in text and "> 选项：原来是这个意思。" in text
@@ -127,3 +128,54 @@ def test_accuracy_first_keeps_gender_copies_and_duplicates():
     }, "CHS")
     records, discarded, _ = extract_extras(text_map, accuracy_first=True)
     assert len(records) == 3 and discarded == []
+
+
+def test_extra_structured_routes_remove_nonadjacent_alternatives_with_full_evidence():
+    prefix = "Activity_Chat_Fest_10161201_"
+    tm = TextMap({prefix + "01": "女主路线", prefix + "02": "中间的公共台词", prefix + "03": "男主路线"}, "CHS")
+    def info(side, peer):
+        return SpeakerInfo("店员", None, 0.98, "perform", perform={
+            "explicit_gender": True, "sides": [side], "paired_key": prefix + peer,
+            "assets": ["fixture.asset"], "occurrences": [],
+        })
+    speakers = _index({prefix + "01": info("F", "03"), prefix + "03": info("M", "01")})
+    records, discarded, stats = extract_extras(tm, speaker_index=speakers)
+    assert [r["source_key"] for r in records] == [prefix + "02", prefix + "03"]
+    assert discarded[0]["reason"] == "perform_gender_route"
+    assert discarded[0]["paired_source_key"] == prefix + "03"
+    assert discarded[0]["raw_text"] == "女主路线"
+    assert discarded[0]["perform"]["assets"] == ["fixture.asset"]
+    assert records[-1]["perform"]["sides"] == ["M"] and stats.structured_filtered == 1
+    all_rows, removed, _ = extract_extras(tm, speaker_index=speakers, accuracy_first=True)
+    assert len(all_rows) == 3 and not removed
+    assert all(r["raw_text"] == tm.get(r["source_key"]) for r in all_rows)
+
+
+def test_extra_gender_variant_survives_empty_base_and_renders_own_gender():
+    key = "Side_Chat_Fest_226023006_01"
+    tm = TextMap({key: "<color=red></color>", key + "F": "{M#哥哥}{F#姐姐}，你好"}, "CHS")
+    rows, removed, _ = extract_extras(tm)
+    assert len(rows) == 1 and not removed
+    all_rows, removed, _ = extract_extras(tm, accuracy_first=True)
+    assert all_rows[0]["text"] == "姐姐，你好" and not removed
+    assert all_rows[0]["raw_text"] == tm.get(key + "F")
+
+
+def test_extra_equal_options_unknown_speakers_and_repeated_dialogue_survive():
+    prefix = "Activity_Chat_Fest_10161201_"
+    tm = TextMap({prefix + "01": "好。", prefix + "02": "好。", prefix + "03": "好。"}, "CHS")
+    index = SpeakerIndex({prefix + "02": SpeakerInfo("NPC", None, 1, "perform"),
+                          prefix + "03": SpeakerInfo("NPC", None, 1, "perform")}, SpeakerStats(), {prefix + "01"})
+    rows, removed, _ = extract_extras(tm, speaker_index=index)
+    assert [r["line_type"] for r in rows] == ["option", "dialogue", "dialogue"]
+    assert not removed
+
+
+def test_extra_display_names_render_gender_and_preserve_hidden_identity():
+    prefix = "Side_Chat_Fest_226023006_"
+    tm = TextMap({prefix + "01": "甲", prefix + "01F": "乙", prefix + "02": "丙"}, "CHS")
+    index = _index({prefix + "01": SpeakerInfo("{M#哲}{F#铃}", None, 1, "perform"),
+                    prefix + "01F": SpeakerInfo("{M#哲}{F#铃}", None, 1, "perform"),
+                    prefix + "02": SpeakerInfo("？？？", None, 1, "perform")})
+    rows, _, _ = extract_extras(tm, speaker_index=index, accuracy_first=True)
+    assert [r["speaker"] for r in rows] == ["哲", "铃", "？？？"]

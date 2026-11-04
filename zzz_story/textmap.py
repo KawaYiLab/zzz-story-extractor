@@ -29,8 +29,16 @@ class TextMap:
 
 
 def _read(path: Path) -> dict[str, str]:
-    with path.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
+    def unique_pairs(pairs):
+        mapping = {}
+        for key, value in pairs:
+            if key in mapping and mapping[key] != value:
+                raise ValueError(f"{path}: conflicting TextMap values for {key!r}")
+            mapping[key] = value
+        return mapping
+
+    with path.open("r", encoding="utf-8-sig") as handle:
+        payload = json.load(handle, object_pairs_hook=unique_pairs)
     if not isinstance(payload, dict):
         raise ValueError(f"{path} is not a JSON object")
     return {str(k): v for k, v in payload.items() if isinstance(v, str)}
@@ -55,27 +63,12 @@ def load_language_map(paths: dict[str, Path], language: str) -> dict[str, str]:
 
 def load_text_map(paths: dict[str, Path], language: str = "CHS") -> TextMap:
     language = language.upper()
-    merged: dict[str, str] = {}
-    base = paths.get("TextMap/TextMapTemplateTb.json")
-    if base:
-        merged.update(_read(base))
-
+    # Finish the fallback language before applying the requested language.
+    # A CHS hotfix must never overwrite a translated base-table value.
+    merged = load_language_map(paths, "CHS")
     if language != "CHS":
-        stem = language
-        lang_base = paths.get(f"TextMap/TextMap_{stem}TemplateTb.json")
-        if lang_base and lang_base.exists():
-            merged.update(_read(lang_base))
-        else:
-            print(f"warning: no TextMap_{stem} file; falling back to CHS")
-
-    overwrite = paths.get("TextMap/TextMapOverwriteTemplateTb.json")
-    if overwrite and overwrite.exists():
-        merged.update(_read(overwrite))
-
-    if language != "CHS":
-        stem = language
-        lang_overwrite = paths.get(f"TextMap/TextMap_{stem}OverwriteTemplateTb.json")
-        if lang_overwrite and lang_overwrite.exists():
-            merged.update(_read(lang_overwrite))
-
+        translated = load_language_map(paths, language)
+        if not translated:
+            print(f"warning: no TextMap_{language} values; falling back to CHS")
+        merged.update(translated)
     return TextMap(merged, language)

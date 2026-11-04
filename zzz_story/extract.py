@@ -19,6 +19,15 @@ from .chapters import (
 )
 from .clean import clean_text
 from .content import coverage_report
+from .dedupe import (
+    _discarded_record,
+    _filter_perform_routes,
+    _filter_timeline_copies,
+    _mark_discard,
+    resolve_discard_pairs,
+    same_content,
+    shared_route,
+)
 from .extras import candidate_keys as extra_candidate_keys
 from .extras import extract_extras, render_extra_txt
 from .fetch import (
@@ -445,6 +454,7 @@ def extract(
     names_by_scene: dict[tuple[str, str], list[str]] = {}
     names_global: dict[tuple[str, str], list[str]] = {}
     pending: list[dict] = []
+    selected_sources: set[str] = set()
     supplement: list[dict] = []
     early_discarded: list[dict] = []
     name_candidates: list[dict] = []
@@ -499,7 +509,9 @@ def extract(
             and (parsed.family in MAIN_FAMILIES or parsed.family == "MainChat")
             and key.endswith("F")
             and _F_VARIANT_RE.search(key)
-            and key[:-1] in text_map
+            and clean_cached(text_map.get(key), "F").text
+            and clean_cached(text_map.get(key[:-1]), "M").text
+            and (limit is None or key[:-1] in selected_sources)
         ):
             raw = text_map.get(key)
             early_discarded.append({
@@ -515,7 +527,7 @@ def extract(
         if parsed.family in MAIN_FAMILIES or parsed.family == "MainChat":
             if parsed.kind == "name":
                 raw = text_map.get(key)
-                gender = parsed.variant if accuracy_first and parsed.variant in {"M", "F"} else "M"
+                gender = parsed.variant if parsed.variant in {"M", "F"} else "M"
                 cleaned = clean_cached(raw, gender).text
                 if not cleaned:
                     continue
@@ -532,11 +544,12 @@ def extract(
                 if len(stats.missing_examples) < 100:
                     stats.missing_examples.append(key)
                 continue
-            gender = parsed.variant if accuracy_first and parsed.variant in {"M", "F"} else "M"
+            gender = parsed.variant if parsed.variant in {"M", "F"} else "M"
             cleaned = clean_cached(raw, gender)
             if not cleaned.text:
                 continue
             pending.append(_pending_record(parsed, cleaned.text, raw, cleaned.variants, parsed.variant))
+            selected_sources.add(key)
             stats.selected_keys += 1
             stats.line_keys += 1
             if stats.line_keys % 10000 == 0:
@@ -610,7 +623,7 @@ def extract(
             comic_context = scan_comic_context(game_dir, read_json(perform_path),
                                                cache_root / "comic_context_cache.json", refresh=refresh_speakers)
     comic_stats = annotate_supplement_context(supplement, comic_context)
-    alias_name_map = {} if accuracy_first else _infer_alias_names(pending, speaker_index, names_global)
+    alias_name_map = {} if accuracy_first else _infer_alias_names(pending, speaker_index, names_by_scene)
 
     records: list[dict] = []
     for pending_record in pending:
@@ -626,15 +639,16 @@ def extract(
         confidence = info.confidence if info else 0.0
         speaker_source = info.source if info else "none"
 
-        if not speaker and alias:
-            inferred = alias_name_map.get(alias)
+        inference_allowed = not (info and (info.perform or info.timeline or info.source == "conflict"))
+        if not speaker and alias and inference_allowed:
+            inferred = alias_name_map.get((chapter, scene, family, alias))
             if inferred:
                 speaker = inferred
                 confidence = 0.6
                 speaker_source = "scene_alias"
                 stats.scene_alias += 1
 
-        if not speaker and not accuracy_first:
+        if not speaker and not accuracy_first and inference_allowed:
             candidates = [name for name in scene_names if name not in NAME_IGNORE and name not in PLAYER_NAMES]
             if len(candidates) == 1 and (has_voice or (info and info.source == "avatar")):
                 speaker = candidates[0]
@@ -642,7 +656,8 @@ def extract(
                 speaker_source = "scene_name"
                 stats.scene_fallback += 1
 
-        speaker = _normalize_speaker(speaker, "M")
+        gender = pending_record["_variant"] if pending_record["_variant"] in {"M", "F"} else "M"
+        speaker = _normalize_speaker(speaker, gender)
         forced_option = speaker in OPTION_SPEAKERS
         if speaker in NAME_IGNORE:
             speaker = None
@@ -658,7 +673,7 @@ def extract(
                 is_opt = True
             elif speaker_index.is_option(source_key):
                 is_opt = True
-            elif alias and alias_name_map.get(alias) in {"选项", "玩家选项"}:
+            elif alias and alias_name_map.get((chapter, scene, family, alias)) in {"选项", "玩家选项"}:
                 is_opt = True
             elif "_Option" in source_key or "_Opt" in source_key:
                 is_opt = True
@@ -729,9 +744,9 @@ def extract(
     annotate_content(records)
 
     if not accuracy_first:
-        records, dropped = _filter_perform_routes(records)
+        records, dropped = _filter_perform_routes(records, copies=dedupe)
         stats.branch_filtered += dropped
-        records, dropped = _filter_timeline_copies(records)
+        records, dropped = _filter_timeline_copies(records, copies=dedupe)
         stats.branch_filtered += dropped
         # Address filtering must see both branches before pair collapsing
         # keeps one of them by speaker alone.
@@ -805,37 +820,8 @@ def extract(
         )
     )
     all_supplement_records = list(supplement)
-    if dedupe and not accuracy_first:
-        kept_supp: list[dict] = []
-        for rec in supplement:
-            if kept_supp:
-                prev = kept_supp[-1]
-                if (
-                    prev["family"] == rec["family"]
-                    and prev["chapter"] == rec["chapter"]
-                    and prev["scene"] == rec["scene"]
-                    and prev["text"] == rec["text"]
-                ):
-                    _mark_discard(rec, "supplement_duplicate", prev)
-                    continue
-                if (
-                    prev["family"] == rec["family"]
-                    and prev["chapter"] == rec["chapter"]
-                    and prev["scene"] == rec["scene"]
-                ):
-                    p_txt = prev["text"]
-                    c_txt = rec["text"]
-                    # Only collapse an otherwise identical address pair.
-                    paired = p_txt.replace("哥哥", "妹妹") == c_txt.replace("哥哥", "妹妹")
-                    if paired and "妹妹" in p_txt and "哥哥" in c_txt:
-                        _mark_discard(rec, "supplement_gender_address", prev)
-                        continue
-                    if paired and "哥哥" in p_txt and "妹妹" in c_txt:
-                        _mark_discard(prev, "supplement_gender_address", rec)
-                        kept_supp[-1] = rec
-                        continue
-            kept_supp.append(rec)
-        supplement = kept_supp
+    # Subtitle keys do not establish mutually exclusive playback. Keep equal
+    # text and sibling addresses until a resource proves they are alternatives.
 
     _assign_supplement_ids(supplement)
     stats.supplement_lines = len(supplement)
@@ -846,19 +832,12 @@ def extract(
         for record in all_story_records + all_supplement_records
         if id(record) not in kept_objects and record.get("_discard_reason")
     ]
+    resolve_discard_pairs(records + supplement, discarded)
     for record in records + supplement:
         for field_name in ("_discard_reason", "_paired_source_key", "_discard_similarity"):
             record.pop(field_name, None)
     quality = _quality_metrics(records, supplement)
     discarded_names = sum(row.get("record_kind") == "name" for row in discarded)
-
-    issues = validate_records(records, supplement)
-    errors = [issue for issue in issues if issue.level == "error"]
-    warnings = [issue for issue in issues if issue.level == "warning"]
-    if issues:
-        print(f"  validation: {len(errors)} error(s), {len(warnings)} warning(s)")
-        for issue in issues[:8]:
-            print(f"    {issue}")
 
     if "jsonl" in formats_set:
         write_jsonl(records, out_dir / "story.jsonl")
@@ -885,6 +864,7 @@ def extract(
         write_jsonl(name_candidates, out_dir / "name_candidates.jsonl")
 
     extra_stats = None
+    extra_records, extra_discarded = [], []
     if include_extra:
         print("Extracting activity / side / agent stories...")
         extra_records, extra_discarded, extra_stats = extract_extras(
@@ -892,6 +872,7 @@ def extract(
             speaker_index=speaker_index,
             accuracy_first=accuracy_first,
             dedupe=dedupe,
+            keep_raw=keep_raw,
             scene_order=scene_order,
             quest_names=quest_names,
         )
@@ -902,6 +883,14 @@ def extract(
         write_jsonl(extra_discarded, out_dir / "extra-discarded.jsonl")
         detail = ", ".join(f"{name} {count}" for name, count in extra_stats.by_domain.items())
         print(f"  extra lines: {extra_stats.lines} in {len(extra_stats.groups)} groups ({detail})")
+    issues = validate_records(records, supplement, extra_records, discarded + extra_discarded)
+    errors = [issue for issue in issues if issue.level == "error"]
+    warnings = [issue for issue in issues if issue.level == "warning"]
+    if issues:
+        print(f"  validation: {len(errors)} error(s), {len(warnings)} warning(s)")
+        for issue in issues[:8]:
+            print(f"    {issue}")
+
     content_coverage = coverage_report(text_map)
     write_json(out_dir / "content-coverage.json", content_coverage)
     unknown = content_coverage["unclassified"]
@@ -1039,6 +1028,7 @@ def extract(
         "chapter_filter": sorted(only) if only else [],
         "limit": limit,
         "include_supplement": include_supplement,
+        "include_extra": include_extra,
         "accuracy_first": accuracy_first,
         "ordering": {"mode": "catalog", "chronology_status": "unknown"},
         "quality": quality,
@@ -1083,43 +1073,30 @@ def extract(
 def _infer_alias_names(
     pending: list[dict],
     speaker_index,
-    names_global: dict[tuple[str, str], list[str]],
-) -> dict[str, str]:
-    """Infer Chinese names for NPC aliases from scene cast lists.
+    names_by_scene: dict[tuple[str, str], list[str]],
+) -> dict[tuple[str, str, str, str], str]:
+    """Infer only a unique unresolved alias/name inside its own scene.
 
-    Agents are already resolved through AvatarBaseTemplateTb.  NPC aliases
-    (Susie, Deline, ...) are not in that table, so use the scene's _Name keys:
-    known agents/player names are removed, then one-to-one scenes are mapped.
+    Cast-list order is not speaker order; an alias reused by another scene
+    must not inherit a guessed or hidden display name.
     """
-    scene_aliases: dict[tuple[str, str], list[str]] = {}
-    mapping: dict[str, str] = {}
+    scenes: dict[tuple[str, str, str], list[SpeakerInfo]] = {}
     for record in pending:
         info = speaker_index.lookup(record["_source_key"])
-        if not info or not info.alias:
+        if not info:
             continue
-        scene_aliases.setdefault((record["_chapter"], record["_scene"]), []).append(info.alias)
-        if info.speaker:
-            mapping[info.alias] = info.speaker
-
-    for scene_key, aliases in scene_aliases.items():
-        remaining_aliases: list[str] = []
-        for alias in aliases:
-            if alias not in mapping and alias not in remaining_aliases:
-                remaining_aliases.append(alias)
-        if not remaining_aliases:
-            continue
-        known_names = set(mapping.values())
-        remaining_names: list[str] = []
-        for name in names_global.get(scene_key, []):
-            if name in known_names or name in PLAYER_NAMES or name in NAME_IGNORE:
-                continue
-            if name not in remaining_names:
-                remaining_names.append(name)
-        if len(remaining_aliases) == 1 and len(remaining_names) == 1:
-            mapping[remaining_aliases[0]] = remaining_names[0]
-        elif 1 < len(remaining_aliases) == len(remaining_names) <= 4:
-            for alias, name in zip(remaining_aliases, remaining_names):
-                mapping.setdefault(alias, name)
+        scope = (record["_chapter"], record["_scene"], record["_family"])
+        scenes.setdefault(scope, []).append(info)
+    mapping = {}
+    for scope, infos in scenes.items():
+        known_names = {info.speaker for info in infos if info.speaker}
+        known_aliases = {info.alias for info in infos if info.speaker}
+        remaining_aliases = {info.alias for info in infos if info.alias and not info.speaker and info.alias not in known_aliases
+                             and not info.perform and not info.timeline}
+        names = names_by_scene.get((f"{scope[2]}:{scope[0]}", scope[1]), [])
+        remaining_names = set(names) - known_names - PLAYER_NAMES - NAME_IGNORE
+        if len(remaining_aliases) == len(remaining_names) == 1:
+            mapping[(*scope, next(iter(remaining_aliases)))] = next(iter(remaining_names))
     return mapping
 
 
@@ -1144,57 +1121,6 @@ def _pending_record(
     }
 
 
-def _filter_timeline_copies(records: list[dict]) -> tuple[list[dict], int]:
-    """Filter only copies/routes verified by the ChatPlus timeline objects."""
-    by_key = {record["source_key"]: record for record in records}
-    male_by_scene: dict[tuple[str, str, str], list[dict]] = {}
-    for record in records:
-        link = record.get("timeline") or {}
-        if "M" in link.get("sides", []) and not link.get("copy_of"):
-            male_by_scene.setdefault((record["chapter"], record["scene"], record["family"]), []).append(record)
-    drop: set[int] = set()
-    for record in records:
-        link = record.get("timeline") or {}
-        copied = by_key.get(link.get("copy_of"))
-        if copied:
-            _mark_discard(record, "timeline_unused_copy", copied)
-            drop.add(id(record))
-            continue
-        if link.get("sides") != ["F"]:
-            continue
-        candidates = male_by_scene.get((record["chapter"], record["scene"], record["family"]), [])
-        if not candidates:
-            continue
-        paired = min(candidates, key=lambda other: abs(other["line_no"] - record["line_no"]))
-        _mark_discard(record, "timeline_gender_route", paired)
-        drop.add(id(record))
-    return [record for record in records if id(record) not in drop], len(drop)
-
-
-def _filter_perform_routes(records: list[dict]) -> tuple[list[dict], int]:
-    """Remove only explicit, rejoining gender alternatives with a kept peer."""
-    by_key = {record["source_key"]: record for record in records}
-    drop = set()
-    for record in records:
-        link = record.get("perform") or {}
-        copied = by_key.get(link.get("copy_of"))
-        if copied and (record.get("raw_text") or record["text"]) == (copied.get("raw_text") or copied["text"]):
-            _mark_discard(record, "perform_unused_copy", copied)
-            drop.add(id(record))
-            continue
-        if not link.get("explicit_gender") or link.get("sides") != ["F"]:
-            continue
-        paired = by_key.get(link.get("paired_key"))
-        peer = paired.get("perform") or {} if paired else {}
-        if not paired or not peer.get("explicit_gender") or peer.get("sides") != ["M"] or peer.get("paired_key") != record["source_key"]:
-            continue
-        if (record["chapter"], record["scene"], record["family"]) != (paired["chapter"], paired["scene"], paired["family"]):
-            continue
-        _mark_discard(record, "perform_gender_route", paired)
-        drop.add(id(record))
-    return [record for record in records if id(record) not in drop], len(drop)
-
-
 def _verified_male_route(record: dict) -> bool:
     perform = record.get("perform") or {}
     timeline = record.get("timeline") or {}
@@ -1207,10 +1133,10 @@ def _collapse_gender_pairs(
     protagonist: str,
     costumes: frozenset[str] = DEFAULT_COSTUME_PREFIXES,
 ) -> tuple[list[dict], int]:
-    """Drop the opposite protagonist's near-duplicate player line.
+    """Drop equivalent nearby alternatives spoken by opposite protagonists.
 
     Some scenes encode the two protagonists as adjacent line numbers instead
-    of a ``...F`` suffix.  Only same-scene, close, high-similarity pairs whose
+    of a ``...F`` suffix.  Only same-scene, close, identical-content pairs whose
     speakers sit on opposite sides (哲 / 铃, including costume forms such as
     学生哲 / 道士铃) are collapsed; unrelated dialogue is left untouched, so
     the sister's genuinely different NPC lines survive.
@@ -1240,7 +1166,7 @@ def _collapse_gender_pairs(
                     continue
                 # Similarity cannot distinguish negation or other changed
                 # meaning. Only identical player wording is evidence here.
-                if first["text"] != second["text"]:
+                if not same_content(first, second) or shared_route(first) or shared_route(second):
                     continue
                 removed, retained = (first, second) if first_side != protagonist else (second, first)
                 if _verified_male_route(removed):
@@ -1332,6 +1258,10 @@ def _filter_branch_lines(records: list[dict], costumes: frozenset[str] = DEFAULT
             for twin in candidates:
                 if id(twin) in dropped or twin is row:
                     continue
+                if (abs(twin["line_no"] - row["line_no"]) > 5
+                        or row.get("line_type") != twin.get("line_type")
+                        or shared_route(row) or shared_route(twin)):
+                    continue
                 other_speaker = twin.get("speaker")
                 same_speaker = bool(speaker) and speaker == other_speaker
                 sibling = "哥哥" in text and _protagonist_side(other_speaker, costumes) == "M" and (
@@ -1407,7 +1337,7 @@ def _dedupe_records(
     """Collapse identical nearby lines spoken by opposite known protagonists.
 
     Unattributed lines and NPC repetitions are ambiguous and remain intact.
-    With canonical=False, only adjacent same-speaker repeats are removed.
+    With canonical=False, adjacent repeats also require an explicit copy link.
     """
     own = "铃" if protagonist == "F" else ("哲" if protagonist == "M" else None)
 
@@ -1444,11 +1374,15 @@ def _dedupe_records(
                     _protagonist_side(a, costumes) is not None
                     and _protagonist_side(b, costumes) is not None
                     and _protagonist_side(a, costumes) != _protagonist_side(b, costumes)
-                    and gap <= 5
+                    and gap <= 5 and same_content(prev, record)
+                    and not shared_route(prev) and not shared_route(record)
                 )
             else:
-                duplicate = gap == 1 and a == b
+                duplicate = (gap == 1 and a == b and same_content(prev, record)
+                             and (record.get("perform") or record.get("timeline") or {}).get("copy_of") == prev.get("source_key")
+                             and bool(prev.get("source_key")))
             if not duplicate:
+                first[text] = i
                 continue
             removed = prev if preference(record) > preference(prev) else record
             if _verified_male_route(removed):
@@ -1476,36 +1410,6 @@ def _record_raw_text(raw: str, text: str, keep_raw: bool) -> str | None:
     if keep_raw or raw != text:
         return raw
     return None
-
-
-def _mark_discard(record: dict, reason: str, paired: dict, similarity: float | None = None) -> None:
-    record["_discard_reason"] = reason
-    record["_paired_source_key"] = paired.get("source_key")
-    if similarity is not None:
-        record["_discard_similarity"] = round(similarity, 4)
-
-
-def _discarded_record(record: dict) -> dict:
-    """Return the reviewable subset of a line removed by a heuristic."""
-    return {
-        "source_key": record.get("source_key"),
-        "record_kind": "line",
-        "chapter": record.get("chapter"),
-        "scene": record.get("scene"),
-        "family": record.get("family"),
-        "line_no": record.get("line_no"),
-        "sub_no": record.get("sub_no"),
-        "variant": record.get("variant"),
-        "speaker": record.get("speaker"),
-        "speaker_alias": record.get("speaker_alias"),
-        "text": record.get("text"),
-        "raw_text": record.get("raw_text") or record.get("text"),
-        "reason": record.get("_discard_reason"),
-        "paired_source_key": record.get("_paired_source_key"),
-        "similarity": record.get("_discard_similarity"),
-        **({"timeline": record["timeline"]} if record.get("timeline") else {}),
-        **({"perform": record["perform"]} if record.get("perform") else {}),
-    }
 
 
 def _count_discard_reasons(records: list[dict]) -> dict[str, int]:

@@ -149,7 +149,9 @@ def _quest_prefix(scenes: set[str], quest_names: dict[int, str]) -> tuple[str, s
     """Most common ``X`` of ``X·其一`` quest names reached from scene ids."""
     prefixes: Counter[str] = Counter()  # one count per scene
     example: dict[str, str] = {}
-    for scene in scenes:
+    # A set's iteration order changes across processes; choose repeatable
+    # evidence even when several quest parts support the same event name.
+    for scene in sorted(scenes):
         if not scene.isdigit():
             continue
         value = int(scene)

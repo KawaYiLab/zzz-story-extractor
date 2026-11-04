@@ -41,7 +41,7 @@
 | `scene` / `scene_act` / `scene_title` | 来源场景号、导出幕次与可用标题；幕次属于导出顺序 |
 | `family` | 内容类型，例如 `GalGame`、`MainChat`、`BubbleStory` |
 | `line_no` / `sub_no` / `variant` | 来源键中的行号、子编号与变体 |
-| `text` | 清除布局、HTML 等标记后的文本 |
+| `text` | 渲染布局/性别分支、已识别的富文本标记后的文本；保留未知尖括号占位符，注音显示为“正文（注音）” |
 | `raw_text` | 清洗前原文；与 `text` 相同时默认写 `null`，`--keep-raw` 或完整性模式强制保留 |
 | `text_variants` | 原文中的男女主角内嵌分支，清洗后两版不同时记录 |
 | `order` | 本次导出的全局排列序号 |
@@ -60,7 +60,7 @@
 | `speaker_id` | 已确认形态归一后的角色名，属于文本名称，不是游戏数字 ID |
 | `speaker_form` | 已确认的服装或形态；不会按名字包含关系随意合并角色 |
 | `speaker_alias` | 可用的资源内部配音别名 |
-| `speaker_source` | `voice`、`avatar`、`timeline`、`tips`、`scene_alias`、`scene_name` 或 `none` |
+| `speaker_source` | `perform`、`voice`、`avatar`、`timeline`、`tips`、`scene_alias`、`scene_name` 或 `none`；内部索引的冲突标记为 `conflict` |
 | `speaker_confidence` | 解析或推断的置信标记；场景别名与单角色兜底分别为 0.6、0.4 |
 | `speaker_status` | `resolved`、`inferred`、`unresolved`、`not_applicable` |
 | `speaker_gap_reason` | 未解决原因，例如没有结构化引用、演员槽位未绑定、显示名冲突或配音别名未解 |
@@ -70,6 +70,8 @@
 | `line_type` | `dialogue`、`option`、`narration`、`unknown` 或 `placeholder` |
 
 `scene_alias` 与 `scene_name` 属于推断；完整性模式关闭这些兜底。姓名表只能提供候选，不能单独证明逐句说话人或实际出场。整幕缺少结构化引用且角色未知时，TXT 会提示这些候选尚未核实。
+
+别名推断限定在同一章节、场景和内容类型的唯一未解别名/姓名；不按名单顺序配对多个角色，也不传播到其他场景。精确来源键优先于规范化键匹配，等强度的姓名冲突保留未知；结构化姓名缺口不再被场景名单覆盖。
 
 `line_type=unknown` 包括角色未解、整个场景缺少说话人数据等情况，不能全部归因为配音别名缺失。旁白与玩家选项可以没有说话人。
 
@@ -95,6 +97,7 @@
 
 - `Comic_*` 经 ComicConfig 的外部 CAB/PPtr、Timeline 轨道及 BubbleEvent UUID 确认后使用 `context_status=resource_linked`；`comic_context` 保留资源、漫画名、时间轴、marker 时间及显示名。未确认者仍为 `unlinked`。这些字段只表示局部资源关系，不确认主线章节或跨场景顺序，每条继续独立展示来源。
 - `CS_*` 使用 `context_status=chapter_only`，只确认所属章节。季章 token 通过与正文相同的规则推导，避免章节改号后跨季挂载。
+- 相邻同文字幕和兄妹称呼变化保留为独立来源候选；缺少播放分支证据时不自动合并。
 - 补充文本 ID 为 `SUP_<source_key>`，新增条目不会重编号。旧 `SUP00001` 等编号应通过来源键迁移。
 - `lore/` 导出设定 Markdown；代理人互动的 `lore/agents/dialogue-audit.jsonl` 保留来源键、原文、角色、资源证据与路线去向，无法确定档案归属者同时进入 `unassigned-dialogue.jsonl` 和独立 Markdown。
 - 街头互动的 `lore/street/dialogue-audit.jsonl` 保留短句、同文不同来源及未确认分支；`metadata-audit.jsonl` 保留姓名、事件名和交互标题，它们不作为对白。
@@ -118,9 +121,11 @@
 - `chapter` 是来源分组 `<domain>.<标签>`，如 `activity.SayItWithFlowers`，不随命名变化。`chapter_label` 优先使用推断出的中文活动名（`活动剧情 · 花语未明之言`），绑定主线章节的支线表复用章节名，其余保留内部标签。
 - 活动与支线的中文名由 `zzz_story/event_names.py` 推断，只采用与游戏内活动标题字符串一致的证据，按强弱依次为：同名标题键 `ActivityMainTitle_<标签>`（`title`）、`<标签>_ActivityTitle`（`tagged`）、跳转文案“推进「X」剧情”（`jump`）、本组场景任务名的共同前缀（`quest`，至少两个场景）、本组正文明显多于其他组的标题引用（`mention`）。采用的层级写入 `group_name_source`，依据键汇总在 `coverage.json` 的 `extra.group_names`。两组推断出同名时，名称后附内部标签。
 - 代理人邀约（`PartnerDate_*`）、商店与街区 NPC（`StoreChat_*`、`StoreBubble_*` 等）由 `lore/` 提取，登记表直接引用其前缀常量，不重复写入 `extra.jsonl`。`chapter_order` 从 1,000,000 起按域分段，排在主线之后。
-- `line_id` 为 `EX_<source_key>`，新增条目不会重编号。组内按类型、场景号、行号排列，`chronology_status=unknown`、`context_status=source_key_only`。
+- `line_id` 为 `EX_<source_key>`，新增条目不会重编号。组内按类型、场景号、行号排列，`chronology_status=unknown`；存在演出/时间轴关联时 `context_status=resource_linked`，其余为 `source_key_only`。
 - `speaker` 来自共享的演出/配音索引（需本机游戏），或空洞事件正文中的 `名字：「…」`（`speaker_source=inline`）；其余保持为空，`line_type=unknown`。`_Name` 键只写入 `scene_speakers`。
-- 默认模式丢弃有男主原键的 `…F` 女主副本和同场景相邻同文，写入 `extra-discarded.jsonl`；完整性模式全部保留。
+- 活动/支线/代理人 Chat、Bubble 等配置资源参与共享结构化解析；`perform`、`timeline`、`speaker_confidence`、`speaker_status` 和 `speaker_gap_reason` 随正文导出。隐藏身份“？？？”保留显示名，姓名中的性别标记按该来源分支渲染。
+- 默认模式筛去有非空男主候选的 `…F` 来源和互相配对的明确女主路线，以及经资源证明的同内容副本，原文与证据写入 `extra-discarded.jsonl`。相邻同文和选项后的同文回答保留；完整性模式全部保留并写入 `raw_text`。`--keep-raw` 同样适用于主线外剧情。
+- `coverage.extra.structured_filtered` 统计由演出/时间轴证据筛去的条数；`adjacent_duplicates` 为兼容保留，当前为 0。
 - `extra.txt` 是按域、分组、场景排版的可读版本。`--no-extra` 跳过；`--only-chapter`、`--limit` 时不生成。
 
 键族归属由 `zzz_story/content.py` 的登记表统一判定。每次提取写出 `content-coverage.json`：各域键数、字数，以及形似对白但未登记的键族（`unclassified`）。版本更新后可单独运行 `python -m zzz_story coverage` 检查新键族。
@@ -133,9 +138,11 @@ Season 1 的过场演出使用不带 `Main_` 前缀的 `GalGame_Chapter<数字>_
 
 `--accuracy-first` 保留双方来源分支、重复候选和清洗前原文，关闭场景名单猜测，另生成 `name_candidates.jsonl`。它用于核验候选完整性，不能保证候选均为正式内容。
 
-删减记录包括原文、来源键、稳定 ID、原因和 `paired_source_key`，可用时附带相似度。`record_kind` 区分 `line` 与 `name`；统计分别给出 `discarded_lines`、`discarded_names` 和 `discarded_entries`。完整性模式的删减文件为空。
+删减记录包括原文、来源键、原因和 `paired_source_key`，可用时附带资源证据及相似度。正文的稳定 ID 由来源键派生。台词的 `paired_source_key` 指向最终保留来源；连续筛选时新增 `paired_source_chain` 保存中间来源和终点。`record_kind` 区分 `line` 与 `name`，未写该字段的旧记录按 `line`；统计分别给出 `discarded_lines`、`discarded_names` 和 `discarded_entries`。完整性模式的删减文件为空。
 
-`scripts/check_corpus_integrity.py` 要求两份输出具有相同输入哈希、语言和筛选范围，核查候选是否全部进入正文或删减审计、原文是否保留、稳定 ID 是否漂移。设定互动存在时也核查其候选与去向。
+`scripts/check_corpus_integrity.py` 要求两份输出具有相同输入哈希、语言和筛选范围，核查主线、补充和主线外候选是否全部进入正文或删减审计、原文是否保留、稳定 ID 是否漂移，以及删减配对是否最终保留。设定互动存在时也核查其候选与去向。
+
+`content-audit.json` 的 `extra_repeated_pairs` 与 `repeated_passages` 提供待核对来源。段落检测使用同章节/类型/场景内连续三行、至少 24 字的窗口，兼顾说话人与行类型，仅对比较值做 NFC 和空白归一化，不改变正文。`review_required` 表示需核对，不触发删减。
 
 ## 清单与覆盖率
 
@@ -148,6 +155,6 @@ Season 1 的过场演出使用不带 `Main_` 前缀的 `GalGame_Chapter<数字>_
 - `attribution` 按 `speaker_status`、缺口原因和内容类型汇总。
 - `by_chapter` 以章节 token 为键，显示标签见 `chapters` 表。
 - `quality` 包含档案覆盖、任务关联和未关联漫画数量。
-- `validation` 记录错误、警告和逐项问题，包括重复/缺失 ID、空正文、章节标签冲突、补充文本跨季挂载及占位说明署名。
+- `validation` 覆盖主线、补充与主线外记录，包括重复/缺失 ID、重复来源键、空正文、删减重叠或失效配对、章节标签冲突、补充文本跨季挂载及占位说明署名。
 
 所有覆盖率与结构检查均针对提取候选及已读取资源。恢复真实分支播放、跨场景顺序及尚未关联的漫画仍需要额外的演出执行证据或游戏实录。

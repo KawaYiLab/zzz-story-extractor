@@ -81,3 +81,11 @@ def test_extract_extras_labels_groups_with_event_names():
     }
     assert stats.named_groups == 1
     assert stats.group_names["activity.HotPot"]["evidence"] == "ActivityMainTitle_HotPot_OB2.7"
+
+
+def test_quest_name_evidence_is_independent_of_scene_iteration_order():
+    from zzz_story.event_names import _quest_prefix
+    quests = {101: "活动标题·其一", 102: "活动标题·其二"}
+    first = _quest_prefix(["1020000", "1010000"], quests)
+    second = _quest_prefix(["1010000", "1020000"], quests)
+    assert first == second == ("活动标题", "活动标题·其一")

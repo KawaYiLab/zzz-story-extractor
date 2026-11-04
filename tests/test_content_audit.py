@@ -5,6 +5,7 @@ from zzz_story.writers import (
     write_jsonl,
     write_story_txt,
     write_supplement_txt,
+    write_text,
 )
 
 
@@ -40,3 +41,34 @@ def test_audit_detects_stale_text_csv_and_chapter_exports(tmp_path):
     assert "story.txt differs from JSONL rendering" in result["export_errors"]
     assert "CSV record count differs" in result["export_errors"]
     assert "chapter file inventory differs" in result["export_errors"]
+
+
+def test_audit_covers_extra_exports_and_anomalies(tmp_path):
+    from zzz_story.extras import render_extra_txt
+    fixture(tmp_path)
+    rows = [{"source_key": "extra", "line_id": "EX_extra", "chapter": "activity.Fest", "domain": "activity",
+             "chapter_label": "活动", "family": "Chat", "scene": "1", "text": "残留{M#标记}", "line_type": "unknown"}]
+    write_jsonl(rows, tmp_path / "extra.jsonl")
+    write_text(tmp_path / "extra.txt", render_extra_txt(rows))
+    result = audit(tmp_path)
+    assert result["summary"]["extra_lines"] == 1
+    assert result["summary"]["text_anomalies"] == 1
+    assert not result["export_errors"]
+    (tmp_path / "extra.txt").write_text("stale", encoding="utf-8")
+    assert "extra.txt differs from JSONL rendering" in audit(tmp_path)["export_errors"]
+
+
+def test_repeated_passages_find_blocks_without_merging_options_or_scenes():
+    from zzz_story.content_audit import repeated_passages
+    texts = ["这是重复段落的第一句话。", "这是重复段落的第二句话。", "这是重复段落的第三句话。"]
+    rows = [{"source_key": str(n), "chapter": "activity.Fest", "family": "Chat", "scene": "1",
+             "text": text, "speaker": "NPC", "line_type": "dialogue"} for n, text in enumerate(texts * 2)]
+    result = repeated_passages(rows)
+    assert result[0]["source_keys"] == [["0", "1", "2"], ["3", "4", "5"]]
+    assert len(rows) == 6
+    rows[3]["line_type"] = "option"
+    assert repeated_passages(rows) == []
+    rows[3]["line_type"] = "dialogue"
+    for row in rows[3:]:
+        row["scene"] = "2"
+    assert repeated_passages(rows) == []

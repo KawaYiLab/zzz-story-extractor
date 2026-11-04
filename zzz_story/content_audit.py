@@ -7,9 +7,11 @@ import csv
 import json
 import re
 import tempfile
+import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from .extras import render_extra_txt
 from .narrative import attribution_summary
 from .validate import validate_output
 from .writers import (
@@ -17,6 +19,7 @@ from .writers import (
     write_chapter_files,
     write_story_txt,
     write_supplement_txt,
+    write_text,
 )
 
 
@@ -27,10 +30,14 @@ def read_rows(path: Path) -> list[dict]:
         return [json.loads(line) for line in handle if line.strip()]
 
 
-def export_errors(output: Path, story: list[dict], supplement: list[dict]) -> list[str]:
+def export_errors(output: Path, story: list[dict], supplement: list[dict], extras: list[dict] | None = None) -> list[str]:
     errors = []
     with tempfile.TemporaryDirectory(prefix="zzz-export-audit-") as tmp:
         root = Path(tmp)
+        if (output / "extra.txt").exists():
+            write_text(root / "extra.txt", render_extra_txt(extras or []))
+            if (root / "extra.txt").read_bytes() != (output / "extra.txt").read_bytes():
+                errors.append("extra.txt differs from JSONL rendering")
         if (output / "story.txt").exists():
             write_story_txt(story, root / "story.txt")
             if (root / "story.txt").read_bytes() != (output / "story.txt").read_bytes():
@@ -71,10 +78,54 @@ def export_errors(output: Path, story: list[dict], supplement: list[dict]) -> li
     return errors
 
 
+def repeated_passages(records: list[dict]) -> list[dict]:
+    """Locate non-adjacent repeated spans for review, never automatic deletion.
+
+    Three-line signatures follow sentence-window deduplication. Comparison
+    only normalizes canonical Unicode and whitespace; digits, negation,
+    punctuation, speakers and option/dialogue boundaries remain significant.
+    """
+    groups = defaultdict(list)
+    for row in records:
+        groups[(row["chapter"], row["family"], row["scene"])].append(row)
+    findings = []
+    for scope, rows in groups.items():
+        values = [(re.sub(r"\s+", " ", unicodedata.normalize("NFC", row["text"])).strip(),
+                   row.get("speaker"), row.get("line_type")) for row in rows]
+        seen = {}
+        start = 0
+        while start + 3 <= len(rows):
+            signature = tuple(values[start:start + 3])
+            previous = seen.setdefault(signature, start)
+            if previous + 3 > start or sum(len(item[0]) for item in signature) < 24:
+                start += 1
+                continue
+            length = 3
+            while (start + length < len(rows) and previous + length < start
+                   and values[previous + length] == values[start + length]):
+                length += 1
+            findings.append({"chapter": scope[0], "family": scope[1], "scene": scope[2],
+                             "line_count": length, "status": "review_required",
+                             "source_keys": [[row["source_key"] for row in rows[index:index + length]]
+                                             for index in (previous, start)]})
+            start += length
+    return findings
+
+
 def audit(output: Path, *, baseline: Path | None = None, cache: Path | None = None) -> dict:
     story = read_rows(output / "story.jsonl")
     supplement = read_rows(output / "supplement.jsonl")
     discarded = read_rows(output / "discarded.jsonl")
+    extras = read_rows(output / "extra.jsonl")
+    extra_discarded = read_rows(output / "extra-discarded.jsonl")
+    extra_groups = defaultdict(list)
+    for row in extras:
+        extra_groups[(row["chapter"], row["family"], row["scene"])].append(row)
+    extra_repeats = [{"source_keys": [a["source_key"], b["source_key"]], "text": b["text"],
+                      "speakers": [a.get("speaker"), b.get("speaker")],
+                      "line_types": [a.get("line_type"), b.get("line_type")]}
+                     for rows in extra_groups.values() for a, b in zip(rows, rows[1:]) if a["text"] == b["text"]]
+    passages = repeated_passages(story + extras + supplement)
     groups = defaultdict(list)
     for row in story:
         groups[(row["chapter"], row["family"], row["scene"])].append(row)
@@ -136,8 +187,8 @@ def audit(output: Path, *, baseline: Path | None = None, cache: Path | None = No
             unreferenced.append({"chapter": group[0], "family": group[1], "scene": group[2],
                                  "retained_lines": len(rows), "referenced_keys": len(prefixes[prefix]), "unreferenced_keys": missing})
     anomalies = []
-    markup = re.compile(r"</?(?:color|size|b|i|u|sprite)(?:[=>\s])|LAYOUT_[A-Z]", re.IGNORECASE)
-    for row in story + supplement:
+    markup = re.compile(r"</?(?:color|size|b|i|u|sprite|ruby|rt|br)(?:[=>\s/])|\{(?:M|F|LAYOUT_[A-Z_]+)#", re.IGNORECASE)
+    for row in story + supplement + extras:
         reasons = []
         if not row.get("text", "").strip():
             reasons.append("empty_text")
@@ -145,9 +196,11 @@ def audit(output: Path, *, baseline: Path | None = None, cache: Path | None = No
             reasons.append("replacement_character")
         if markup.search(row.get("text", "")):
             reasons.append("uncleaned_markup")
+        if markup.search(row.get("speaker") or ""):
+            reasons.append("uncleaned_speaker_markup")
         if reasons:
             anomalies.append({"source_key": row["source_key"], "reasons": reasons, "text": row["text"]})
-    errors = export_errors(output, story, supplement)
+    errors = export_errors(output, story, supplement, extras)
     errors += [str(issue) for issue in validate_output(output) if issue.level == "error"]
     change = {}
     if baseline:
@@ -161,6 +214,10 @@ def audit(output: Path, *, baseline: Path | None = None, cache: Path | None = No
                                       for k in sorted(common) if old[k]["speaker"] != new[k]["speaker"]],
                   "removed_by_reason": dict(Counter(reason_by_key.get(k, "MISSING_AUDIT") for k in old.keys() - new.keys()))}
     return {"summary": {"main_lines": len(story), "supplement_lines": len(supplement), "scene_groups": len(groups),
+                         "extra_lines": len(extras), "extra_equal_pairs": len(extra_repeats),
+                         "extra_structured_lines": sum(bool(row.get("perform") or row.get("timeline")) for row in extras),
+                         "extra_discarded_by_reason": dict(Counter(row["reason"] for row in extra_discarded)),
+                         "repeated_passages": len(passages),
                          "adjacent_equal_pairs": len(repeats), "long_equal_pairs": sum(r["length"] >= 12 for r in repeats),
                          "equal_pair_status": dict(Counter(r["status"] for r in repeats)),
                          "unattributed_scene_groups": len(gaps), "partially_referenced_scenes": len(unreferenced),
@@ -182,13 +239,14 @@ def audit(output: Path, *, baseline: Path | None = None, cache: Path | None = No
             "attribution": attribution_summary(story),
             "source_variants": source_variants, "source_gaps": source_gaps,
             "export_errors": errors, "repeated_pairs": repeats, "unattributed_scenes": gaps,
+            "extra_repeated_pairs": extra_repeats, "repeated_passages": passages,
             "unreferenced_scene_candidates": unreferenced, "text_anomalies": anomalies, "changes": change,
             "supplement_repeated_pairs": supplement_repeats, "lore_repeated_lines": lore_repeats,
             "lore_dialogue_repeated_pairs": lore_pairs}
 
 
 def write_report(result: dict, path: Path) -> None:
-    lines = ["# 3.3 全量提取质量检查", "", "## 汇总", ""]
+    lines = ["# 全量提取质量检查", "", "## 汇总", ""]
     lines += [f"- {key}: {value}" for key, value in result["summary"].items()]
     lines += ["", *result["notes"], "", "## 修复对比", ""]
     changes = result["changes"]
@@ -201,7 +259,11 @@ def write_report(result: dict, path: Path) -> None:
         if pair["length"] >= 12:
             lines += [f"- {' / '.join(pair['source_keys'])} [{pair['status']}]",
                       "  " + pair["text"].replace("\n", " ")]
-    lines += ["", "完整逐项结果见同目录 content-audit.json，所有删减原文见 discarded.jsonl。"]
+    lines += ["", "## 重复段落待核对", ""]
+    for passage in result["repeated_passages"]:
+        first, second = passage["source_keys"]
+        lines.append(f"- {first[0]} / {second[0]}：{passage['line_count']} 行，保留等待资源证据核对")
+    lines += ["", "完整逐项结果见 content-audit.json；删减原文见 discarded.jsonl 和 extra-discarded.jsonl。"]
     _atomic_write_text(path / "content-audit.md", "\n".join(lines) + "\n")
     _atomic_write_text(path / "content-audit.json", json.dumps(result, ensure_ascii=False, indent=2) + "\n")
 

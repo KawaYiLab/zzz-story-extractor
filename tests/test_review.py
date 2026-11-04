@@ -144,3 +144,25 @@ def test_review_partial_provenance_does_not_label_other_files(tmp_path):
     provenance = {"commit":"a" * 40, "version":"3.2.0", "files":{"table.json":{"sha256":sha256_file(table)}}}
     (tmp_path / SOURCE_PROVENANCE).write_text(json.dumps(provenance))
     assert fetch_source_version(tmp_path, required_files=["table.json", "unverified.json"]) == "unknown"
+
+
+def test_integrity_includes_extra_records_and_requires_a_retained_peer(tmp_path):
+    from scripts.check_corpus_integrity import check
+    output, audit = tmp_path / "out", tmp_path / "audit"
+    main = {"source_key": "main", "line_id": "M", "text": "正文", "chronology_status": "unknown"}
+    extra = {"source_key": "extra", "line_id": "EX_extra", "text": "活动", "chronology_status": "unknown"}
+    for directory in (output, audit):
+        directory.mkdir()
+        for name, rows in (("story", [main]), ("extra", [extra]), ("discarded", []),
+                           ("extra-discarded", []), ("name_candidates", [])):
+            (directory / (name + ".jsonl")).write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        (directory / "manifest.json").write_text(json.dumps({"language": "CHS", "files": {"table": {"sha256": "abc"}},
+                                                           "accuracy_first": directory == audit, "include_extra": True}))
+    assert check(output, audit)["candidates"] == 2
+    (output / "extra.jsonl").write_text("")
+    with pytest.raises(ValueError, match="全部"):
+        check(output, audit)
+    removed = {"source_key": "extra", "text": "活动", "raw_text": "活动", "reason": "copy", "paired_source_key": "missing"}
+    (output / "extra-discarded.jsonl").write_text(json.dumps(removed), encoding="utf-8")
+    with pytest.raises(ValueError, match="配对来源无效"):
+        check(output, audit)

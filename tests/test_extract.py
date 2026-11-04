@@ -89,7 +89,7 @@ def test_extract_fixture(tmp_path, monkeypatch):
     )
     assert stats.total_lines == 6
     assert stats.options_count == 2
-    assert stats.supplement_lines == 4
+    assert stats.supplement_lines == 6
 
     records = [
         json.loads(line)
@@ -121,7 +121,7 @@ def test_extract_fixture(tmp_path, monkeypatch):
     assert "#### 过场 01" in supp_txt
     assert "过场台词一" in supp_txt
     assert "妹妹，可以开始吗？" in supp_txt
-    assert "哥哥，可以开始吗？" not in supp_txt  # male-only: Belle's version dropped
+    assert "哥哥，可以开始吗？" in supp_txt  # No resource proves this is an alternate route.
 
     supplements = [
         json.loads(line)
@@ -161,10 +161,9 @@ def test_extract_fixture(tmp_path, monkeypatch):
     assert galgame[0]["quest_id"] == 9901
     discarded = [json.loads(line) for line in (out / "discarded.jsonl").read_text(encoding="utf-8").splitlines()]
     assert {row["source_key"] for row in discarded} == {
-        "CS_00_01_020", "CS_00_01_030",
         "Main_GalGame_Chapter00_10000002_002F", "Main_GalGame_Chapter00_10000002_Name_001F",
     }
-    assert manifest["counts"]["discarded_lines"] == 3
+    assert manifest["counts"]["discarded_lines"] == 1
     assert manifest["counts"]["discarded_names"] == 1
     assert all(row["raw_text"] and row["paired_source_key"] for row in discarded)
     assert all(not any(key.startswith("_discard") or key == "_paired_source_key" for key in row) for row in records + supplements)
@@ -338,12 +337,12 @@ def test_dedupe_drops_copied_branch_block():
 def test_branch_filter_needs_counterpart():
     records = [
         _rec(1, "师妹，快来这边！", "橘福福"),
-        _rec(15, "师弟，快来这边！", "橘福福"),
+        _rec(2, "师弟，快来这边！", "橘福福"),
         _rec(20, "引壶师弟，掩护师父！", "橘福福"),
     ]
     kept, dropped = _filter_branch_lines(records)
     assert dropped == 1
-    assert [r["line_no"] for r in kept] == [15, 20]
+    assert [r["line_no"] for r in kept] == [2, 20]
 
 
 def test_branch_filter_sibling_pairs():
@@ -597,3 +596,67 @@ def test_review_reused_output_is_rejected_before_any_writes(tmp_path):
         extract(out_dir=out, data_dir=tmp_path / "missing", no_speakers=True, include_supplement=False)
     assert (out / "supplement.jsonl").read_text(encoding="utf-8") == "old"
     assert not (out / "manifest.json").exists()
+
+
+def test_common_route_sibling_dialogue_and_options_are_preserved():
+    common = [_rec(1, "出发吧。", "铃"), _rec(2, "出发吧。", "哲")]
+    common[0]["perform"] = {"sides": ["F", "M"], "occurrences": [{"node": 1}]}
+    assert _collapse_gender_pairs(common, "M")[1] == 0
+    assert _dedupe_records(common, "M")[1] == 0
+    choice = [_rec(1, "出发吧。", "铃", line_type="option"), _rec(2, "出发吧。", "哲")]
+    assert _collapse_gender_pairs(choice, "M")[1] == 0
+    assert _dedupe_records(choice, "M")[1] == 0
+
+
+def test_dedupe_uses_recent_match_after_earlier_unrelated_repeat():
+    rows = [_rec(1, "出发吧。", "NPC"), *[_rec(n, str(n)) for n in range(2, 8)],
+            _rec(8, "出发吧。", "铃"), _rec(9, "出发吧。", "哲")]
+    kept, dropped = _dedupe_records(rows, "M")
+    assert dropped == 1
+    assert [r["line_no"] for r in kept if r["text"] == "出发吧。"] == [1, 9]
+
+
+def test_scene_alias_inference_does_not_zip_cast_order_or_leak_between_scenes():
+    from zzz_story.extract import _infer_alias_names
+    from zzz_story.speakers import SpeakerIndex, SpeakerInfo, SpeakerStats
+    pending = [{"_source_key": k, "_chapter": "Chapter01", "_scene": scene, "_family": "Chat"}
+               for k, scene in (("a", "1"), ("b", "1"), ("c", "2"), ("d", "3"))]
+    speakers = SpeakerIndex({k: SpeakerInfo(None, alias, 0, "voice", True)
+                             for k, alias in (("a", "x"), ("b", "y"), ("c", "x"), ("d", "x"))}, SpeakerStats())
+    mapping = _infer_alias_names(pending, speakers, {("Chat:Chapter01", "1"): ["甲", "乙"],
+                                                   ("Chat:Chapter01", "2"): ["丙"], ("Chat:Chapter01", "3"): ["丁"]})
+    assert mapping == {("Chapter01", "2", "Chat", "x"): "丙", ("Chapter01", "3", "Chat", "x"): "丁"}
+
+
+def test_address_pairs_do_not_remove_distant_repetitions():
+    rows = [_rec(1, "师妹，快来这边！", "橘福福"), _rec(15, "师弟，快来这边！", "橘福福")]
+    assert _filter_branch_lines(rows)[1] == 0
+
+
+def test_empty_female_source_and_limited_unselected_peer_are_not_discarded(tmp_path):
+    data = tmp_path / "data"
+    prefix = "Main_GalGame_Chapter00_10000002_"
+    # JSON insertion order deliberately visits the female key before its peer.
+    tm = {prefix + "01F": "女主独立文本", prefix + "02": "另一个文本", prefix + "01": "男主文本",
+          prefix + "03F": "", prefix + "03": "非空文本"}
+    for rel in REQUIRED_FILES:
+        _write(data / rel, tm if rel == "TextMap/TextMapTemplateTb.json" else {})
+    full = tmp_path / "full"
+    extract(out_dir=full, data_dir=data, game_dir=tmp_path / "no-game", no_speakers=True,
+            include_lore=False, include_extra=False, formats="jsonl")
+    removed = [json.loads(line) for line in (full / "discarded.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [row["source_key"] for row in removed] == [prefix + "01F"]
+    limited = tmp_path / "limited"
+    extract(out_dir=limited, data_dir=data, game_dir=tmp_path / "no-game", no_speakers=True,
+            include_lore=False, formats="jsonl", limit=1)
+    assert (limited / "discarded.jsonl").read_text(encoding="utf-8") == ""
+    row = json.loads((limited / "story.jsonl").read_text(encoding="utf-8"))
+    assert row["source_key"] == prefix + "01F" and row["text"] == "女主独立文本"
+
+
+def test_scene_alias_inference_does_not_borrow_other_family_names():
+    from zzz_story.extract import _infer_alias_names
+    from zzz_story.speakers import SpeakerIndex, SpeakerInfo, SpeakerStats
+    pending = [{"_source_key": "k", "_chapter": "Chapter01", "_scene": "1", "_family": "Chat"}]
+    index = SpeakerIndex({"k": SpeakerInfo(None, "npc", 0, "voice", True)}, SpeakerStats())
+    assert _infer_alias_names(pending, index, {("Bubble:Chapter01", "1"): ["路人"]}) == {}

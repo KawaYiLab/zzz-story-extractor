@@ -21,8 +21,15 @@ from dataclasses import dataclass, field
 from .chapters import chapter_info
 from .clean import clean_text
 from .content import DOMAIN_LABELS, EXTRA_DOMAINS, ContentKey, classify_key
+from .dedupe import (
+    _discarded_record,
+    _filter_perform_routes,
+    _filter_timeline_copies,
+    resolve_discard_pairs,
+)
 from .event_names import EventName, infer_event_names
 from .keys import natural_scene_key
+from .narrative import annotate_attribution
 
 # Within a group, keep families in the mainline reading order.
 _FAMILY_ORDER = {
@@ -53,6 +60,7 @@ class ExtraStats:
     speaker_lines: int = 0
     gender_copies: int = 0
     adjacent_duplicates: int = 0
+    structured_filtered: int = 0
     named_groups: int = 0
     group_names: dict[str, dict] = field(default_factory=dict)
     by_domain: dict[str, int] = field(default_factory=dict)
@@ -97,6 +105,7 @@ def extract_extras(
     speaker_index=None,
     accuracy_first: bool = False,
     dedupe: bool = True,
+    keep_raw: bool = False,
     scene_order: dict[str, tuple[int, int]] | None = None,
     quest_names: dict[int, str] | None = None,
     domains: Iterable[str] = EXTRA_DOMAINS,
@@ -108,17 +117,20 @@ def extract_extras(
     names: dict[tuple[str, str, str], list[str]] = {}
     pending: list[tuple[ContentKey, str, str, dict | None]] = []
     discarded: list[dict] = []
-    clean_cache: dict[str, tuple[str, dict | None]] = {}
+    clean_cache: dict[tuple[str, str], tuple[str, dict | None]] = {}
+    candidates = candidate_keys(text_map, domains)
+    line_keys = {parsed.key for parsed in candidates if parsed.kind == "line"}
 
-    for parsed in candidate_keys(text_map, domains):
+    for parsed in candidates:
         stats.candidate_keys += 1
         raw = text_map.get(parsed.key)
         if not raw:
             continue
-        cleaned = clean_cache.get(raw)
+        gender = parsed.variant if parsed.variant in {"M", "F"} else "M"
+        cleaned = clean_cache.get((raw, gender))
         if cleaned is None:
-            result = clean_text(raw, "M")
-            cleaned = clean_cache[raw] = (result.text, result.variants)
+            result = clean_text(raw, gender)
+            cleaned = clean_cache[(raw, gender)] = (result.text, result.variants)
         text, variants = cleaned
         if not text:
             continue
@@ -130,7 +142,7 @@ def extract_extras(
             continue
         if not accuracy_first and parsed.variant == "F":
             twin = _male_twin(parsed.key, text_map)
-            if twin is not None:
+            if twin in line_keys and clean_text(text_map.get(twin), "M").text:
                 stats.gender_copies += 1
                 discarded.append(_discard(parsed, text, raw, "explicit_gender_variant", twin))
                 continue
@@ -180,7 +192,10 @@ def extract_extras(
                 DOMAIN_ORDER_BASE * (EXTRA_DOMAINS.index(parsed.domain) + 1) + index * 10
             )
         info = speaker_index.lookup(parsed.key) if speaker_index is not None else None
-        speaker = info.speaker if info and info.speaker not in _NAME_IGNORE else None
+        gender = parsed.variant if parsed.variant in {"M", "F"} else "M"
+        speaker = clean_text(info.speaker, gender).text if info and info.speaker else None
+        if speaker in {"选项", "玩家选项", "旁白"}:
+            speaker = None
         speaker_source = info.source if speaker else "none"
         inline = _INLINE_SPEAKER_RE.match(text) if not speaker else None
         if inline and inline["name"] not in _NAME_IGNORE:
@@ -216,7 +231,7 @@ def extract_extras(
             "speaker_source": speaker_source,
             "has_voice": bool(info and info.has_voice),
             "text": text,
-            "raw_text": raw if raw != text else None,
+            "raw_text": raw if keep_raw or accuracy_first or raw != text else None,
             "text_variants": variants,
             "source_key": parsed.key,
             "line_type": line_type,
@@ -226,20 +241,25 @@ def extract_extras(
             "context_status": "source_key_only",
             "order": 0,
         }
-        if dedupe and not accuracy_first and records:
-            previous = records[-1]
-            if (
-                previous["source_key"] != record["source_key"]
-                and previous["chapter"] == record["chapter"]
-                and previous["family"] == record["family"]
-                and previous["scene"] == record["scene"]
-                and previous["text"] == record["text"]
-                and previous["speaker"] == record["speaker"]
-            ):
-                stats.adjacent_duplicates += 1
-                discarded.append(_discard(parsed, text, raw, "adjacent_duplicate", previous["source_key"]))
-                continue
+        if info:
+            record["speaker_confidence"] = info.confidence
+            if info.perform:
+                record["perform"] = info.perform
+                record["context_status"] = "resource_linked"
+            if info.timeline:
+                record["timeline"] = info.timeline
+                record["context_status"] = "resource_linked"
         records.append(record)
+
+    annotate_attribution(records)
+    if not accuracy_first:
+        all_records = records
+        records, dropped = _filter_perform_routes(records, copies=dedupe)
+        stats.structured_filtered += dropped
+        records, dropped = _filter_timeline_copies(records, copies=dedupe)
+        stats.structured_filtered += dropped
+        discarded.extend(_discarded_record(row) for row in all_records if row.get("_discard_reason"))
+    resolve_discard_pairs(records, discarded)
 
     for index, record in enumerate(records, 1):
         record["order"] = index

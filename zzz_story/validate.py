@@ -40,7 +40,8 @@ def _chapter_labels(rows: list[dict]) -> dict[str, set[str]]:
     return labels
 
 
-def validate_records(records: list[dict], supplements: list[dict] | None = None) -> list[Issue]:
+def validate_records(records: list[dict], supplements: list[dict] | None = None,
+                     extras: list[dict] | None = None, discarded: list[dict] | None = None) -> list[Issue]:
     """Check a parsed extraction in memory.  Cheap enough to run on every extract."""
     issues: list[Issue] = []
 
@@ -48,7 +49,21 @@ def validate_records(records: list[dict], supplements: list[dict] | None = None)
         issues.append(Issue("error", "empty-story", "主线记录为空，抽取参数或数据源可能有问题"))
         return issues
 
-    all_rows = records + (supplements or [])
+    all_rows = records + (supplements or []) + (extras or [])
+    keys = Counter(row["source_key"] for row in all_rows if row.get("source_key"))
+    if any(count > 1 for count in keys.values()):
+        issues.append(Issue("error", "duplicate-source-key", "正文存在重复来源键"))
+    empty = [row for row in all_rows if "text" in row and (not isinstance(row["text"], str) or not row["text"].strip())]
+    if empty:
+        issues.append(Issue("error", "empty-text", f"{len(empty)} 条记录正文为空或不是字符串"))
+    removed = [row for row in discarded or [] if row.get("record_kind") != "name"]
+    removed_keys = Counter(row.get("source_key") for row in removed)
+    if any(count > 1 for count in removed_keys.values()) or keys.keys() & removed_keys.keys():
+        issues.append(Issue("error", "discard-overlap", "删减来源键重复或同时存在于正文"))
+    bad_pairs = [row for row in removed if row.get("paired_source_key") not in keys
+                 or not row.get("reason") or not isinstance(row.get("raw_text"), str)]
+    if bad_pairs:
+        issues.append(Issue("error", "discard-pair", f"{len(bad_pairs)} 条删减缺少原文、原因或最终保留的配对来源"))
     unclassified = [row for row in records if reviewed_outline(row) and row.get("content_status") != "reviewed_placeholder"]
     if unclassified:
         issues.append(Issue("warning", "unclassified-placeholder", f"{len(unclassified)} 条已核对的剧情占位说明仍作为正式正文显示（例如 {unclassified[0].get('source_key')}）"))
@@ -110,7 +125,9 @@ def validate_output(out_dir: Path) -> list[Issue]:
 
     records = _read_jsonl(story)
     supplements = _read_jsonl(out_dir / "supplement.jsonl")
-    return validate_records(records, supplements)
+    extras = _read_jsonl(out_dir / "extra.jsonl")
+    discarded = _read_jsonl(out_dir / "discarded.jsonl") + _read_jsonl(out_dir / "extra-discarded.jsonl")
+    return validate_records(records, supplements, extras, discarded)
 
 
 def _read_jsonl(path: Path) -> list[dict]:
