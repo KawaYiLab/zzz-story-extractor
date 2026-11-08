@@ -134,7 +134,7 @@ python -m venv .venv
 
 ## 上传到绳网后端
 
-`upload` 将 JSONL（含 `extra.jsonl`）、清单和 `lore/**/*.md` 打成 gzip 语料包，上传到 [ikserver-rs](https://github.com/KawaYiLab/ikserver-rs)，供剧情库 MCP（`/v1/story/mcp`）检索。需要后端管理员账号或令牌：
+`upload` 将主线、补充、`extra.jsonl`、清单及 `lore/` 下的 Markdown 和结构化 JSONL 打成 gzip 语料包，上传到 [ikserver-rs](https://github.com/KawaYiLab/ikserver-rs)，供剧情库 MCP（`/v1/story/mcp`）检索。新服务端按来源键将代理人互动、街头对话、短信的署名和证据关联回原文；漫画资源关联、原文及分支可按需展开。旧服务端会忽略 `lore` 中的 JSONL，需先更新后端再重新上传已有输出目录，无需重新提取。需要后端管理员账号或令牌：
 
 ```powershell
 .\.venv\Scripts\python.exe -m zzz_story upload --out out\zzz_story_3.3.0_chs --server https://your-server.example --account admin@example.com

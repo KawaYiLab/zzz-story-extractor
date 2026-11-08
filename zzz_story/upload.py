@@ -7,7 +7,7 @@ Bundle format (must match ``ik_story::corpus::Bundle`` on the server)::
 
     {"format": 1, "manifest": {...}, "story": "<story.jsonl>",
      "supplement": "<supplement.jsonl>", "extra": "<extra.jsonl>",
-     "lore": {"agents/01_xxx.md": "..."}}
+     "lore": {"agents/01_xxx.md": "...", "agents/dialogue-audit.jsonl": "..."}}
 
 ``extra`` (activities, side quests, agent stories) is optional; servers that
 predate it ignore the field.
@@ -39,7 +39,7 @@ class UploadError(RuntimeError):
 
 
 def build_bundle(out_dir: Path) -> dict[str, Any]:
-    """Read story.jsonl (required), supplement.jsonl, extra.jsonl, manifest.json and lore/**/*.md."""
+    """Read narrative JSONL, manifest, and lore Markdown with its structured source records."""
     story = out_dir / "story.jsonl"
     if not story.is_file():
         raise UploadError(f"{out_dir} 里没有 story.jsonl，先运行 `python -m zzz_story extract`")
@@ -63,7 +63,7 @@ def build_bundle(out_dir: Path) -> dict[str, Any]:
     _normalize_chapter_orders(bundle)
     lore_dir = out_dir / "lore"
     if lore_dir.is_dir():
-        for path in sorted(lore_dir.rglob("*.md")):
+        for path in sorted(p for p in lore_dir.rglob("*") if p.is_file() and p.suffix in {".md", ".jsonl"}):
             bundle["lore"][path.relative_to(lore_dir).as_posix()] = path.read_text(encoding="utf-8")
     return bundle
 

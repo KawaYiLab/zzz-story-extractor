@@ -46,6 +46,25 @@ def test_build_bundle_includes_extra_stories(tmp_path):
     assert build_bundle(out)["extra"].startswith('{"domain":"activity"')
 
 
+def test_lore_structured_sources_survive_bundle_round_trip(tmp_path):
+    out = make_output(tmp_path)
+    sources = {
+        "agents/dialogue-audit.jsonl": '{"source_key":"Talk_01","speaker":"安比","text":"汉堡","retained":true}\n',
+        "interknot/message-config-audit.jsonl": '{"config_id":1,"references":[]}\n',
+        "street/dialogue-audit.jsonl": '{"source_key":"Street_01","retained":false,"text":"删减候选"}\n',
+    }
+    for name, raw in sources.items():
+        path = out / "lore" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(raw, encoding="utf-8")
+    (out / "lore" / "agents" / "local.log").write_text("不属于语料", encoding="utf-8")
+    decoded = json.loads(gzip.decompress(encode_bundle(build_bundle(out))))
+    assert decoded["format"] == 1  # Old servers ignore lore JSONL entries.
+    for name, raw in sources.items():
+        assert decoded["lore"][name] == raw
+    assert "agents/local.log" not in decoded["lore"]
+
+
 def test_encode_is_deterministic_gzip_json(tmp_path):
     bundle = build_bundle(make_output(tmp_path))
     a, b = encode_bundle(bundle), encode_bundle(bundle)
