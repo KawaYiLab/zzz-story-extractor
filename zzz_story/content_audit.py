@@ -61,7 +61,7 @@ def export_errors(output: Path, story: list[dict], supplement: list[dict], extra
         if len(rows) != len(story):
             errors.append("CSV record count differs")
         for expected, actual in zip(story, rows):
-            for field in ("source_key", "line_id", "text", "raw_text", "speaker"):
+            for field in ("source_key", "line_id", "text", "raw_text", "speaker", "selected_variant"):
                 if actual.get(field, "") != (expected.get(field) or ""):
                     errors.append(f"CSV {field} differs: {expected['source_key']}")
             if actual.get("scene_speakers", "") != "、".join(expected.get("scene_speakers") or []):

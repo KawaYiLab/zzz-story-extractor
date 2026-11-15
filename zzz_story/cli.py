@@ -103,6 +103,8 @@ def _build_parser() -> argparse.ArgumentParser:
     lore_parser.add_argument("--game-dir", type=Path, default=None, help="local game resources for dialogue evidence")
     lore_parser.add_argument("--no-speakers", action="store_true", help="skip local dialogue evidence")
     lore_parser.add_argument("--accuracy-first", action="store_true", help="retain both dialogue routes")
+    lore_parser.add_argument("--protagonist", choices=("M", "F"), default="M",
+                             help="select the displayed gender variant; both source variants remain available")
 
     upload_parser = sub.add_parser(
         "upload",
@@ -311,7 +313,8 @@ def main(argv: list[str] | None = None) -> int:
                 no_speakers=args.no_speakers,
             )
             stats = extract_lore(text_map, avatar_base, out, speaker_index=speaker_index,
-                                 accuracy_first=args.accuracy_first, data_paths=data_paths)
+                                 accuracy_first=args.accuracy_first, data_paths=data_paths,
+                                 protagonist=args.protagonist)
             print("")
             print("Worldbuilding lore extraction completed successfully!")
             print(f"  agents: {stats.get('lore_agents', 0)}")

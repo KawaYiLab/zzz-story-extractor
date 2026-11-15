@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from .clean import clean_text
+from .lore_machine import selected_variant
 from .narrative import annotate_attribution, annotate_local_order
 from .writers import _record_line, write_jsonl
 
@@ -42,7 +43,7 @@ def street_source(key: str) -> tuple[str, str, int, str | None] | None:
 
 
 def extract_street(text_map, directory: Path, *, speaker_index=None,
-                   accuracy_first: bool = False) -> dict[str, int]:
+                   accuracy_first: bool = False, protagonist: str = "M") -> dict[str, int]:
     """Retain short lines, both source variants, and repeated distinct keys.
 
     Scene name tables are candidates, never per-line speaker bindings. Only
@@ -57,11 +58,11 @@ def extract_street(text_map, directory: Path, *, speaker_index=None,
         if prefix is None:
             continue
         if _METADATA.search(key):
-            metadata.append({"source_key": key, "raw_text": raw, "text": clean_text(raw).text,
+            metadata.append({"source_key": key, "raw_text": raw, "text": clean_text(raw, protagonist=protagonist).text,
                              "record_kind": "name_or_title_metadata"})
         name_match = _NAME.fullmatch(key[len(prefix):])
         if name_match:
-            name = clean_text(raw).text
+            name = clean_text(raw, protagonist=protagonist).text
             if name and name not in _NON_SPEAKERS:
                 names[(prefix.rstrip("_"), name_match[1])].append(name)
             continue
@@ -69,15 +70,17 @@ def extract_street(text_map, directory: Path, *, speaker_index=None,
         if parsed is None:
             continue
         family, scene, line_no, variant = parsed
-        cleaned = clean_text(raw, variant or "M")
+        requested = variant or protagonist
+        cleaned = clean_text(raw, requested)
         info = speaker_index.lookup(key) if speaker_index else None
-        speaker = clean_text(info.speaker, variant or "M").text if info and info.speaker else None
+        speaker = clean_text(info.speaker, requested).text if info and info.speaker else None
         is_option = speaker in {"选项", "玩家选项"} or bool(speaker_index and speaker_index.is_option(key))
         if speaker in _NON_SPEAKERS:
             speaker = None
         row = {
             "source_key": key, "raw_text": raw, "text": cleaned.text,
             "text_variants": cleaned.variants, "family": family, "scene": scene,
+            "selected_variant": selected_variant(cleaned, requested),
             "chapter": "street", "line_no": line_no, "variant": variant,
             "speaker": speaker, "speaker_alias": info.alias if info else None,
             "speaker_source": info.source if info else "none",
@@ -104,6 +107,17 @@ def extract_street(text_map, directory: Path, *, speaker_index=None,
                     and (peer["family"], peer["scene"]) == (row["family"], row["scene"])):
                 row.update(retained=False, reason="perform_gender_route", paired_source_key=peer["source_key"])
     rows.sort(key=lambda r: (r["family"], r["scene"], r.get("_local_order", (r["line_no"],)), r["source_key"]))
+    if machine := getattr(text_map, "machine", None):
+        for row in rows:
+            if not row["retained"]:
+                continue
+            entity = f"{row['family']}|{row['scene']}"
+            doc = machine.begin("street", entity, f"{row['family']} · {row['scene']}",
+                                "street/01_街区路人与市井闲聊.md", doc_type="scene")
+            machine.audit(doc, "street/dialogue-audit.jsonl", row,
+                          section_kind="bubble" if "Bubble" in row["family"] else "daily",
+                          section_title=row["family"], scene_id=row["scene"])
+        machine.end()
     groups = defaultdict(list)
     for row in rows:
         row.pop("_local_order", None)

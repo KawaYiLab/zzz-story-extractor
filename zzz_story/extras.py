@@ -109,8 +109,13 @@ def extract_extras(
     scene_order: dict[str, tuple[int, int]] | None = None,
     quest_names: dict[int, str] | None = None,
     domains: Iterable[str] = EXTRA_DOMAINS,
+    candidates: list[ContentKey] | None = None,
 ) -> tuple[list[dict], list[dict], ExtraStats]:
-    """Return ``(records, discarded, stats)`` for the selected extra domains."""
+    """Return ``(records, discarded, stats)`` for the selected extra domains.
+
+    ``candidates`` may reuse ``candidate_keys(text_map, domains)`` from the
+    caller's speaker-input preparation; no second classification is needed.
+    """
     stats = ExtraStats()
     scene_order = scene_order or {}
     quest_names = quest_names or {}
@@ -118,7 +123,8 @@ def extract_extras(
     pending: list[tuple[ContentKey, str, str, dict | None]] = []
     discarded: list[dict] = []
     clean_cache: dict[tuple[str, str], tuple[str, dict | None]] = {}
-    candidates = candidate_keys(text_map, domains)
+    if candidates is None:
+        candidates = candidate_keys(text_map, domains)
     line_keys = {parsed.key for parsed in candidates if parsed.kind == "line"}
 
     for parsed in candidates:
@@ -233,6 +239,7 @@ def extract_extras(
             "text": text,
             "raw_text": raw if keep_raw or accuracy_first or raw != text else None,
             "text_variants": variants,
+            "selected_variant": gender if variants else None,
             "source_key": parsed.key,
             "line_type": line_type,
             "scene_speakers": list(names.get((parsed.group, parsed.family, parsed.scene), [])),

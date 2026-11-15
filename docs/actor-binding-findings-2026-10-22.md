@@ -77,7 +77,7 @@
 
 ## 配置来源
 
-研究下载保存在仓库外的本地 `C:/Users/Administrator/zzz-story-research/actor-bindings/3.3.0/`，
+研究下载保存在仓库外的本地研究目录，
 没有把额外配置作为已核验导出输入偷偷混入清单。下列哈希是下载字节的 SHA-256：
 
 | 表 | SHA-256 |

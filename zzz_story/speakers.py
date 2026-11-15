@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -320,6 +321,8 @@ def ongoing_tips_speakers(
     text_map,
     alias_map: dict[str, str],
     protagonist: str = "M",
+    *,
+    json_loader: Callable[[Path], object] | None = None,
 ) -> dict[str, tuple[str, str | None]]:
     """Speakers for in-level dialogue (Ongoing*) from OngoingTipsConfigTemplateTb.
 
@@ -331,7 +334,7 @@ def ongoing_tips_speakers(
     candidates: dict[str, set[tuple[str, str | None]]] = {}
     if not path or not path.exists():
         return {}
-    payload = read_json(path)
+    payload = (json_loader or read_json)(path)
     rows = payload.get("IAEFFFFLKNB", []) if isinstance(payload, dict) else []
     for row in rows:
         if not isinstance(row, dict):
@@ -366,7 +369,8 @@ def ongoing_tips_speakers(
     return out
 
 
-def ongoing_voice_names(data_paths: dict[str, Path], text_map, protagonist: str = "M") -> dict[str, list[dict]]:
+def ongoing_voice_names(data_paths: dict[str, Path], text_map, protagonist: str = "M", *,
+                        json_loader: Callable[[Path], object] | None = None) -> dict[str, list[dict]]:
     """Keep display-name evidence scoped to a complete configured voice key.
 
     One actor alias may have multiple displayed identities. Names must never
@@ -375,7 +379,7 @@ def ongoing_voice_names(data_paths: dict[str, Path], text_map, protagonist: str 
     path = data_paths.get("FileCfg/OngoingTipsConfigTemplateTb.json")
     if not path or not path.exists():
         return {}
-    payload = read_json(path)
+    payload = (json_loader or read_json)(path)
     rows = payload.get("IAEFFFFLKNB", []) if isinstance(payload, dict) else []
     candidates = {}
     for row in rows:
@@ -440,6 +444,8 @@ def build_speaker_index(
     cache_path: Path,
     refresh: bool = False,
     no_speakers: bool = False,
+    en_map: dict[str, str] | None = None,
+    json_loader: Callable[[Path], object] | None = None,
 ) -> tuple["SpeakerIndex", SpeakerStats]:
     stats = SpeakerStats()
     if no_speakers:
@@ -450,10 +456,12 @@ def build_speaker_index(
         print("warning: speaker inputs missing; continuing without per-line speakers")
         return SpeakerIndex({}, stats), stats
 
-    en_map = load_language_map(data_paths, "EN")
-    alias_map = load_alias_map(text_map, en_map, read_json(avatar_path))
+    if en_map is None:
+        en_map = load_language_map(data_paths, "EN")
+    load_json = json_loader or read_json
+    alias_map = load_alias_map(text_map, en_map, load_json(avatar_path))
     print(f"  alias table: {len(alias_map)} entries (EN names + AvatarBase)")
-    tips = ongoing_tips_speakers(data_paths, text_map, alias_map, "M")
+    tips = ongoing_tips_speakers(data_paths, text_map, alias_map, "M", json_loader=load_json)
     if tips:
         print(f"  ongoing tips: {len(tips)} speaker keys")
 
@@ -465,7 +473,7 @@ def build_speaker_index(
         print("warning: game data missing; only ongoing-tip speakers available")
     else:
         speakers, option_keys = _perform_speakers(
-            text_map, alias_map, perform_path, game_dir, cache_path, refresh, stats
+            text_map, alias_map, perform_path, game_dir, cache_path, refresh, stats, load_json
         )
 
     # Ongoing tips cover in-level barks the Perform blocks cannot reach.
@@ -485,7 +493,7 @@ def build_speaker_index(
             )
             stats.tips_speakers += 1
     stats.tips_speakers += resolve_ongoing_voice_names(
-        speakers, ongoing_voice_names(data_paths, text_map, "M"), text_map)
+        speakers, ongoing_voice_names(data_paths, text_map, "M", json_loader=load_json), text_map)
     _recount_speaker_gaps(speakers, stats)
     return _index_from_speakers(speakers, text_keys, stats, option_keys), stats
 
@@ -539,6 +547,7 @@ def _perform_speakers(
     cache_path: Path,
     refresh: bool,
     stats: SpeakerStats,
+    json_loader: Callable[[Path], object] | None = None,
 ) -> tuple[dict[str, SpeakerInfo], set[str]]:
     fingerprint = _speaker_fingerprint(text_map, alias_map, perform_path, game_dir)
     if cache_path.exists() and not refresh:
@@ -570,7 +579,7 @@ def _perform_speakers(
         f"{catalog.bundle_count} bundles"
     )
 
-    perform_payload = read_json(perform_path)
+    perform_payload = (json_loader or read_json)(perform_path)
     asset_paths = story_asset_paths(perform_payload)
     by_block, matched = map_story_assets(catalog, asset_paths)
     block_paths = []

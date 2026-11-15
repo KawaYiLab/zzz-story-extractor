@@ -44,6 +44,7 @@
 | `text` | 渲染布局/性别分支、已识别的富文本标记后的文本；保留未知尖括号占位符，注音显示为“正文（注音）” |
 | `raw_text` | 清洗前原文；与 `text` 相同时默认写 `null`，`--keep-raw` 或完整性模式强制保留 |
 | `text_variants` | 原文中的男女主角内嵌分支，清洗后两版不同时记录 |
+| `selected_variant` | 有内嵌变体时当前 `text` 选择的 M/F；无不同变体时为 null，不表示实际播放路线 |
 | `order` | 本次导出的全局排列序号 |
 
 `line_id` 标识来源文本，尚未变为实际播放事件 ID。同一文本键可能被多个演出节点引用。
@@ -104,6 +105,31 @@
 - 短信的 `lore/interknot/message-audit.jsonl` 保留逐条来源与配置确认的发送方；`message-config-audit.jsonl` 保留每次配置事件及所有文本/选项引用；`message-extra-sources.jsonl` 补出选项、长回复与其他配置正文；`message-item-audit.jsonl` 保留附件文本来源。联系人与发送方分开，零 ID、冲突和缺失姓名仍为未知。
 - `source-variants.jsonl` 记录 `_Gender` 等已支持的辅助来源键，对基础正文附加 `source_variants`，不将等价原文虚构为第二次播放。`source-gaps.jsonl` 记录空主线来源及独立 EN 原文是否存在，不替换中文正文。
 - `supplement-context-report.json` 记录漫画配置扫描和关联统计及缺失资源；缓存资源解析成功不证明所有节点在运行时播放。
+
+## 设定机器目录
+
+新的完整设定导出同时生成 `lore/documents.jsonl`，供 MCP 直接读取抽取对象。Markdown 仍是供人阅读的展示文件。机器目录不解析 Markdown，原文字段在提取阶段、原始 TextMap 键仍可用时收集。
+
+完整字段合同及审计来源文件约定见 [Lore machine document format v1](lore-machine-format.md)。
+
+第一条非空记录为 `record_type=manifest`、`schema_version=1`，包含 `protagonist`（M/F）及 `covered_source_files`（lore 内的相对 Markdown 路径）。支持该目录的消费者跳过这些展示文件；没有机器目录的旧包继续兼容。版本不支持、目录损坏或引用不存在时应明确失败，不能回退到展示正文后伪装成成功。
+
+后续 `record_type=document` 记录包含稳定 `doc_id`、`category`、`title`、`source_file`、可选 `entity_id` 和有序 `items`。`doc_id` 按原始实体或来源身份派生，不按排序号、显示名去重或正文哈希派生。同名不同来源保留，重复引用不代表已确认的播放次数。
+
+- `kind=source` 的项目包含 `field`、`source_key`、纯原文 `text`、`raw_text`、`text_variants` 和 `selected_variant`。无不同变体时选择状态为 null；原文与显示文本相同时可按主干约定省略重复原文。来源值不加入导语、表格预览、署名或路线标签。
+- `kind=audit` 的项目通过 `record_source` 和 `source_key` 引用现有审计记录。附件引用由其原始嵌套结构定位；完整配置与演出证据仍保存在来源记录中。
+- `section_kind`、`section_title`、`scene_id`、`scene_title` 是文档结构元数据。章节、角色、档案字段和互动分组直接提供给消费者，无须从 Markdown 标题或后缀重建。
+- 角色的可选 `profile` 含身份字段及证据位置。来自正文的字段用零基 `item_index` 指向项目；配置或明确派生的元数据用 `source_ref` 说明原配置字段、原值和转换依据，不当作游戏原句。
+
+消费者可以把两个真实变体分别索引，并在搜索/读取响应中标明 M/F。路线标签只属于展示，不能作为 `verify` 的正文命中。生成导语、缺失值显示、启发式分类和截断预览也不属于来源正文。
+
+可对新输出执行只读来源验收：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_mcp_lore_sources.py --output <新输出目录> --data-dir data\cache\3.3.0
+```
+
+该检查对照 TextMap 原值、清洗与分支选择，解析审计/配置引用并核对保留来源覆盖；不重新提取或解析 Markdown 正文。结构验收不证明完整播放关系。
 
 ## 活动、支线与代理人故事
 

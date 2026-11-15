@@ -1,9 +1,6 @@
 .venv/
-data/cache/
-data/completion-research/
-data/message-research/
-data/*-research.json
-out/
+/data/
+/out/
 .pytest_cache/
 .ruff_cache/
 __pycache__/
@@ -11,6 +8,8 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+*.log
+*.tmp
 .env
 .env.*
 !.env.example

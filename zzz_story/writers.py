@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
@@ -16,12 +17,18 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 
 def write_jsonl(records: Iterable[dict], path: Path) -> int:
-    lines: list[str] = []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
     count = 0
-    for record in records:
-        lines.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
-        count += 1
-    _atomic_write_text(path, "\n".join(lines) + ("\n" if lines else ""))
+    try:
+        with tmp.open("w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+                handle.write("\n")
+                count += 1
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
     return count
 
 
@@ -58,8 +65,9 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
         chunks.append("# 绝区零主线剧情")
         chunks.append("")
         chunks.append("章节：")
+        chapter_counts = Counter(record.get("chapter") for record in records)
         for chapter, label in _chapters_in_order(records):
-            count = sum(1 for record in records if record.get("chapter") == chapter)
+            count = chapter_counts[chapter]
             chunks.append(f"- {label}（{chapter}，{count} 行）")
         chunks.append("")
         chunks.append("---")

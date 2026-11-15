@@ -7,6 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .clean import clean_text
+from .lore_machine import selected_variant
 
 MESSAGE_TABLES = (
     "FileCfg/MessageConfigTemplateTb.json",
@@ -31,7 +32,7 @@ def _rows(payload):
     return []
 
 
-def message_metadata(config_payload, group_payload, npc_payload, item_payload, tm) -> dict:
+def message_metadata(config_payload, group_payload, npc_payload, item_payload, tm, *, protagonist: str = "M") -> dict:
     """Keep alternative identity fields and events instead of selecting a guess.
 
     IDs in both configured name slots must agree, be nonzero and resolve to
@@ -48,7 +49,7 @@ def message_metadata(config_payload, group_payload, npc_payload, item_payload, t
             for row in names.get(ident, []):
                 name_key = row.get("HAKHHHCAENA")
                 result.append({"id": ident, "name_key": name_key,
-                               "name": clean_text(tm.get(name_key or "")).text or None})
+                               "name": clean_text(tm.get(name_key or ""), protagonist=protagonist).text or None})
         return result
 
     group_rows = defaultdict(list)
@@ -86,11 +87,12 @@ def message_metadata(config_payload, group_payload, npc_payload, item_payload, t
             # Some reply slots contain emoji paths. Preserve them as nontext
             # references, but never turn a path into a dialogue line.
             is_text = key in tm
-            cleaned = clean_text(raw)
+            cleaned = clean_text(raw, protagonist=protagonist)
             ref = {"source_field": field, "source_key": key, "role": role,
                    "raw_text": raw if is_text else None,
                    "text": cleaned.text if is_text else None,
                    "text_variants": cleaned.variants if is_text else None,
+                   "selected_variant": selected_variant(cleaned, protagonist) if is_text else None,
                    "status": "text" if is_text and raw else "empty_text" if is_text else "nontext_or_missing"}
             event["references"].append(ref)
             if is_text:
@@ -107,18 +109,19 @@ def message_metadata(config_payload, group_payload, npc_payload, item_payload, t
             key = row.get(field)
             if isinstance(key, str) and key:
                 raw = tm.get(key)
-                ct = clean_text(raw)
+                ct = clean_text(raw, protagonist=protagonist)
                 refs.append({"source_field": field, "source_key": key, "raw_text": raw,
-                             "text": ct.text, "text_variants": ct.variants})
+                             "text": ct.text, "text_variants": ct.variants,
+                             "selected_variant": selected_variant(ct, protagonist)})
         items.append({"item_id": row.get("HJOEBMMFOMB"), "config_row": row, "references": refs})
     return {"by_source": dict(by_source), "contacts": contacts, "events": events, "items": items}
 
 
-def load_message_metadata(data_paths: dict[str, Path] | None, tm) -> dict:
+def load_message_metadata(data_paths: dict[str, Path] | None, tm, *, protagonist: str = "M") -> dict:
     if not data_paths or not all(data_paths.get(rel) and data_paths[rel].is_file() for rel in MESSAGE_TABLES):
         return {}
     payloads = [json.loads(data_paths[rel].read_text(encoding="utf-8")) for rel in MESSAGE_TABLES]
-    return message_metadata(*payloads, tm)
+    return message_metadata(*payloads, tm, protagonist=protagonist)
 
 
 def source_identity(metadata: dict, key: str) -> dict:

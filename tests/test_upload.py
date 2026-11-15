@@ -72,6 +72,34 @@ def test_encode_is_deterministic_gzip_json(tmp_path):
     assert json.loads(gzip.decompress(a)) == bundle
 
 
+def test_machine_lore_sidecar_keeps_source_text_in_format_one(tmp_path):
+    out = make_output(tmp_path)
+    source = {
+        "schema_version": 1,
+        "doc_id": "lore:message:Message_200312_17",
+        "category": "interknot",
+        "title": "短信来源",
+        "source_file": "interknot/02_短信档案.md",
+        "items": [{
+            "kind": "source",
+            "source_key": "Message_200312_17",
+            "text": "一起出来玩吗",
+            "raw_text": "{M#一起出来玩吗}{F#想约你出来玩~}",
+            "text_variants": {"M": "一起出来玩吗", "F": "想约你出来玩~"},
+            "selected_variant": "M",
+        }],
+    }
+    raw = json.dumps(source, ensure_ascii=False, separators=(",", ":")) + "\n"
+    (out / "lore" / "documents.jsonl").write_text(raw, encoding="utf-8")
+    decoded = json.loads(gzip.decompress(encode_bundle(build_bundle(out))))
+    assert decoded["format"] == 1
+    assert decoded["lore"]["documents.jsonl"] == raw
+    item = json.loads(decoded["lore"]["documents.jsonl"])["items"][0]
+    assert item["text"] == "一起出来玩吗"
+    assert item["raw_text"] == source["items"][0]["raw_text"]
+    assert item["text_variants"]["F"] == "想约你出来玩~"
+
+
 def test_missing_story_is_a_clear_error(tmp_path):
     with pytest.raises(UploadError, match="story.jsonl"):
         build_bundle(tmp_path)

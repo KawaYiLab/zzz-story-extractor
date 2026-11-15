@@ -59,6 +59,9 @@ python -m venv .venv
 
 # 只导出设定资料
 .\.venv\Scripts\python.exe -m zzz_story extract-lore --out out\lore-only
+
+# 设定正文选择女主内嵌变体，原始双方变体仍保留
+.\.venv\Scripts\python.exe -m zzz_story extract-lore --protagonist F --out out\lore-belle
 ```
 
 常用参数（`extract`）：
@@ -105,6 +108,7 @@ python -m venv .venv
 | `supplement-context-report.json` | 漫画资源关联统计与缺失资源 |
 | `name_candidates.jsonl` | 完整性模式的姓名候选，用于核验姓名条目删减 |
 | `lore/` | 代理人、装备、绳网、影院等设定 Markdown，以及代理人、街头、短信和附件来源审计 |
+| `lore/documents.jsonl` | 有来源字段及审计引用的机器目录，供新 MCP 服务直接读取；Markdown 的导语、预览和显示兜底不作为原文 |
 | `content-audit.md` / `content-audit.json` | 单独运行内容审计后生成的质量报告 |
 
 字段、排序、覆盖率和删减审计的详细约定见 [数据格式说明](docs/data-format.md)。计数随输入、筛选范围和解析版本变化，请以本次输出的清单为准。
@@ -134,7 +138,7 @@ python -m venv .venv
 
 ## 上传到绳网后端
 
-`upload` 将主线、补充、`extra.jsonl`、清单及 `lore/` 下的 Markdown 和结构化 JSONL 打成 gzip 语料包，上传到 [ikserver-rs](https://github.com/KawaYiLab/ikserver-rs)，供剧情库 MCP（`/v1/story/mcp`）检索。新服务端按来源键将代理人互动、街头对话、短信的署名和证据关联回原文；漫画资源关联、原文及分支可按需展开。旧服务端会忽略 `lore` 中的 JSONL，需先更新后端再重新上传已有输出目录，无需重新提取。需要后端管理员账号或令牌：
+`upload` 将主线、补充、`extra.jsonl`、清单及 `lore/` 下的 Markdown 和结构化 JSONL 打成 gzip 语料包，上传到 [ikserver-rs](https://github.com/KawaYiLab/ikserver-rs)，供剧情库 MCP（`/v1/story/mcp`）检索。包格式保持为 1。支持机器目录的服务端优先读取 `lore/documents.jsonl` 的来源字段和审计引用，跳过其覆盖的展示 Markdown；没有机器目录的旧包继续按旧方式导入。完整原文、变体及漫画资源证据按需展开。首次使用机器目录需更新后端并在新输出目录重新提取。需要后端管理员账号或令牌：
 
 ```powershell
 .\.venv\Scripts\python.exe -m zzz_story upload --out out\zzz_story_3.3.0_chs --server https://your-server.example --account admin@example.com
@@ -150,6 +154,8 @@ python -m venv .venv
 - 活动、支线、代理人故事、空洞事件写入 `extra.jsonl`（见[数据格式说明](docs/data-format.md#活动支线与代理人故事)），按来源表分组，活动与支线按游戏内标题推断中文名（查不到时保留内部标签），没有任务或播放顺序关联；未接入游戏资源时大多没有逐句说话人。设定及代理人互动单独写入 `lore/`。
 - 键族归属由 `zzz_story/content.py` 统一登记；`content-coverage.json` 和 `coverage` 命令列出未登记的对白类键族，版本更新后先检查一次。
 - 默认偏向男主视角，有明确证据的分支或副本移入删减审计；无法确认的重复与 NPC 台词继续保留。需要双方候选时使用 `--accuracy-first`。
+- 有内嵌性别变体的记录用 `selected_variant` 声明当前正文选择；主提取选择 M，独立设定导出可用 `--protagonist M/F`。两版原始变体仍保存，选择状态不证明实际播放路线。
+- 设定机器目录按来源保留同名条目。分类、导语、截断预览和缺失值显示属于展示信息；原文查证以带来源的字段为准。
 - 活动、支线等 Chat/Bubble 演出共用结构化解析器；正文保留分支与节点证据。相邻同文、字幕称呼差异不会单独触发删减；连续三行及以上的重复段落进入质量报告供核对。
 - 多语言按“中文基础 → 中文覆盖 → 目标语言基础 → 目标语言覆盖”加载，防止中文热修覆盖译文。清洗支持嵌套布局/性别标记、换行与注音；注音显示为“正文（注音）”，原文继续保留。
 - 原显示名优先于配音别名，隐藏身份不被提前揭示；无法可靠关联的角色保留为空。`line_type=unknown` 不等于“有配音但别名缺失”，覆盖率仅对关联配音的保留行计算。

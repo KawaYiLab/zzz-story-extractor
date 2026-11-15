@@ -7,6 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from . import lore_machine as machine_output
 from .clean import clean_text
 from .message_config import load_message_metadata, source_identity
 from .narrative import annotate_attribution
@@ -321,10 +322,10 @@ BANGBOO_SYNERGY_MAP: dict[str, tuple[str, str, str]] = {
 
 
 
-def _clean(raw: str, default: str = "") -> str:
+def _clean(raw: str, default: str = "", *, protagonist: str = "M") -> str:
     if not raw:
         return default
-    cleaned = clean_text(raw).text.strip()
+    cleaned = clean_text(raw, protagonist).text.strip()
     return cleaned if cleaned else default
 
 
@@ -336,6 +337,7 @@ def extract_lore(
     speaker_index=None,
     accuracy_first: bool = False,
     data_paths: dict[str, Path] | None = None,
+    protagonist: str = "M",
 ) -> dict[str, int]:
     """Extract all worldview / lore categories and output structured Markdown files."""
     lore_dir = out_dir / "lore"
@@ -343,19 +345,23 @@ def extract_lore(
         raise FileExistsError(f"设定目录已存在：{lore_dir}；请指定新的 --out，避免混入旧设定")
     lore_dir.mkdir(parents=True, exist_ok=True)
 
+    machine = machine_output.Documents(text_map, protagonist)
+    text_map = machine_output.SourceTextMap(text_map, machine)
+
     stats: dict[str, int] = {}
 
     stats.update(_extract_agents(text_map, avatar_base_data, lore_dir / "agents",
-                                speaker_index=speaker_index, accuracy_first=accuracy_first))
-    stats.update(_extract_equipment(text_map, lore_dir / "equipment", avatar_base_data))
+                                speaker_index=speaker_index, accuracy_first=accuracy_first, protagonist=protagonist))
+    stats.update(_extract_equipment(text_map, lore_dir / "equipment", avatar_base_data, protagonist=protagonist))
     stats.update(_extract_interknot(text_map, lore_dir / "interknot",
-                                   message_metadata=load_message_metadata(data_paths, text_map)))
-    stats.update(_extract_cinema(text_map, lore_dir / "cinema"))
-    stats.update(_extract_glossary(text_map, lore_dir / "glossary"))
+                                   message_metadata=load_message_metadata(data_paths, text_map, protagonist=protagonist), protagonist=protagonist))
+    stats.update(_extract_cinema(text_map, lore_dir / "cinema", protagonist=protagonist))
+    stats.update(_extract_glossary(text_map, lore_dir / "glossary", protagonist=protagonist))
     stats.update(extract_street(text_map, lore_dir / "street",
-                                speaker_index=speaker_index, accuracy_first=accuracy_first))
+                                speaker_index=speaker_index, accuracy_first=accuracy_first, protagonist=protagonist))
 
     _generate_lore_index(lore_dir, stats)
+    stats.update(machine.write(lore_dir))
     return stats
 
 
@@ -366,6 +372,7 @@ def _extract_agents(
     *,
     speaker_index=None,
     accuracy_first: bool = False,
+    protagonist: str = "M",
 ) -> dict[str, int]:
     agents_dir.mkdir(parents=True, exist_ok=True)
 
@@ -417,8 +424,8 @@ def _extract_agents(
         aid = tag_to_aid.get((parsed.agent_tag or "").lower())
         if aid not in playable_ids:
             aid = None
-        ct = clean_text(raw, parsed.variant or "M")
-        display = clean_text(info.speaker, parsed.variant or "M").text if info and info.speaker else None
+        ct = clean_text(raw, parsed.variant if parsed.variant in {"M", "F"} else protagonist)
+        display = clean_text(info.speaker, parsed.variant if parsed.variant in {"M", "F"} else protagonist).text if info and info.speaker else None
         is_option = (display in {"选项", "玩家选项"}
                      or bool(speaker_index and speaker_index.is_option(key)) or "_Option" in key)
         display_role = display if display in {"选项", "玩家选项", "旁白", "玩家"} else None
@@ -426,6 +433,7 @@ def _extract_agents(
         row = {
             "source_key": key, "raw_text": raw, "text": ct.text,
             "text_variants": ct.variants, "variant": parsed.variant,
+            "selected_variant": machine_output.selected_variant(ct, parsed.variant if parsed.variant in {"M", "F"} else protagonist),
             "scope": parsed.scope, "family": parsed.family,
             "event_id": parsed.event, "event_tag": parsed.agent_tag,
             "chapter": parsed.scope, "scene": parsed.event,
@@ -499,8 +507,9 @@ def _extract_agents(
 
     for a in playable:
         aid = str(a.get("PFOAJKNPCHL", 0))
-        name = _clean(tm.get(a.get("HAKHHHCAENA", ""), ""))
-        full_name = _clean(tm.get(a.get("JGHFBBCBBBA", ""), name))
+        machine_output.begin(tm, "agents", aid, aid, "agents/12_漫游者与特别存在.md", doc_type="agent")
+        name = _clean(tm.get(a.get("HAKHHHCAENA", ""), ""), protagonist=protagonist)
+        full_name = _clean(tm.get(a.get("JGHFBBCBBBA", ""), name), protagonist=protagonist)
         camp_id = a.get("OOOHMBMDLBI", 0)
         cjel = a.get("CJELJCPENOL", 0)
         c_idx = (cjel // 100) - 100 if cjel >= 10000 else camp_id
@@ -508,36 +517,36 @@ def _extract_agents(
         if not camp_name:
             camp_name = _clean(
                 tm.get(f"PartnerCamp_Name_{camp_id:02d}", tm.get(f"PartnerCamp_Name_{camp_id}", "漫游者"))
-            )
+            , protagonist=protagonist)
         code = str(a.get("FEKFJBFGANO") or "")
 
         # Birthday & Stature with early and variant fallback
-        birthday = _clean(tm.get(f"Partner_Birthday_{aid}", ""))
-        stature = _clean(tm.get(f"Partner_Stature_{aid}", ""))
+        birthday = _clean(tm.get(f"Partner_Birthday_{aid}", ""), protagonist=protagonist)
+        stature = _clean(tm.get(f"Partner_Stature_{aid}", ""), protagonist=protagonist)
 
         if not birthday or not stature:
             early_idx = EARLY_AVATAR_ATTR_MAP.get(aid)
             if early_idx:
                 if not birthday:
-                    birthday = _clean(tm.get(f"Partner_Birthday_{early_idx}", ""))
+                    birthday = _clean(tm.get(f"Partner_Birthday_{early_idx}", ""), protagonist=protagonist)
                 if not stature:
-                    stature = _clean(tm.get(f"Partner_Stature_{early_idx}", ""))
+                    stature = _clean(tm.get(f"Partner_Stature_{early_idx}", ""), protagonist=protagonist)
 
         if not birthday or not stature:
             base_aid = VARIANT_INHERIT_MAP.get(aid)
             if base_aid:
                 if not birthday:
-                    birthday = _clean(tm.get(f"Partner_Birthday_{base_aid}", ""))
+                    birthday = _clean(tm.get(f"Partner_Birthday_{base_aid}", ""), protagonist=protagonist)
                 if not stature:
-                    stature = _clean(tm.get(f"Partner_Stature_{base_aid}", ""))
+                    stature = _clean(tm.get(f"Partner_Stature_{base_aid}", ""), protagonist=protagonist)
 
         if stature and stature.isdigit():
             stature = f"{stature} cm"
 
-        feature_desc = _clean(tm.get(f"Item_Avatar_{aid}_Des", ""))
+        feature_desc = _clean(tm.get(f"Item_Avatar_{aid}_Des", ""), protagonist=protagonist)
 
         # HIA Investigation License & Ether Aptitude
-        outlook_desc = _clean(tm.get(f"Partner_OutlookDesc_{aid}", ""))
+        outlook_desc = _clean(tm.get(f"Partner_OutlookDesc_{aid}", ""), protagonist=protagonist)
         aptitude = "待协会测定"
         if outlook_desc:
             if "优秀的以太适性" in outlook_desc:
@@ -553,26 +562,26 @@ def _extract_agents(
 
         # Profile entries (Partner_ProfileDesc_{aid}, _1, _2...)
         profiles: list[str] = []
-        p_main = _clean(tm.get(f"Partner_ProfileDesc_{aid}", ""))
+        p_main = _clean(tm.get(f"Partner_ProfileDesc_{aid}", ""), protagonist=protagonist)
         if p_main:
             profiles.append(p_main)
         for i in range(1, 10):
-            p_sub = _clean(tm.get(f"Partner_ProfileDesc_{aid}_{i}", ""))
+            p_sub = _clean(tm.get(f"Partner_ProfileDesc_{aid}_{i}", ""), protagonist=protagonist)
             if p_sub:
                 profiles.append(p_sub)
 
         # Impressions (Wise & Belle sibling dual-view)
-        impression_wise = _clean(tm.get(f"Partner_Impression_m_{aid}", ""))
-        impression_belle = _clean(tm.get(f"Partner_Impression_f_{aid}", ""))
-        impression_gen = _clean(tm.get(f"Partner_Impression_{aid}", ""))
+        impression_wise = _clean(tm.get(f"Partner_Impression_m_{aid}", ""), protagonist=protagonist)
+        impression_belle = _clean(tm.get(f"Partner_Impression_f_{aid}", ""), protagonist=protagonist)
+        impression_gen = _clean(tm.get(f"Partner_Impression_{aid}", ""), protagonist=protagonist)
 
         # Signature W-Engines
         w_engines: list[dict[str, str]] = []
         for rank in ("S", "A", "B"):
-            w_name = _clean(tm.get(f"Item_Weapon_{rank}_{aid}_Name", ""))
+            w_name = _clean(tm.get(f"Item_Weapon_{rank}_{aid}_Name", ""), protagonist=protagonist)
             if w_name:
-                w_short = _clean(tm.get(f"Item_Weapon_{rank}_{aid}_ShortDesc", ""))
-                w_desc = _clean(tm.get(f"Item_Weapon_{rank}_{aid}_Desc", ""))
+                w_short = _clean(tm.get(f"Item_Weapon_{rank}_{aid}_ShortDesc", ""), protagonist=protagonist)
+                w_desc = _clean(tm.get(f"Item_Weapon_{rank}_{aid}_Desc", ""), protagonist=protagonist)
                 w_engines.append({
                     "name": f"{w_name} ({rank}级)",
                     "short_desc": w_short,
@@ -590,9 +599,9 @@ def _extract_agents(
         cinema_acts: list[dict[str, Any]] = []
         if talent_prefix:
             for act in range(1, 7):
-                title = _clean(tm.get(f"{talent_prefix}_Talent_{act:02d}_Title", ""))
-                story = _clean(tm.get(f"{talent_prefix}_Talent_{act:02d}_Desc_02", ""))
-                buff = _clean(tm.get(f"{talent_prefix}_Talent_{act:02d}_Desc_01", ""))
+                title = _clean(tm.get(f"{talent_prefix}_Talent_{act:02d}_Title", ""), protagonist=protagonist)
+                story = _clean(tm.get(f"{talent_prefix}_Talent_{act:02d}_Desc_02", ""), protagonist=protagonist)
+                buff = _clean(tm.get(f"{talent_prefix}_Talent_{act:02d}_Desc_01", ""), protagonist=protagonist)
                 if title or story:
                     if not buff or buff == "PlaceHolder":
                         buff = "[技能等级强化] 普通攻击、闪避、支援技、特殊技、连携技技能等级提升。"
@@ -608,7 +617,7 @@ def _extract_agents(
         if aid in gal_events:
             for group in sorted(gal_events[aid], key=str):
                 eid = event_label(group)
-                title = _clean(tm.get(f"Title_{group[2]}", f"专属邀约 {eid}"))
+                title = _clean(tm.get(f"Title_{group[2]}", f"专属邀约 {eid}"), protagonist=protagonist)
                 sorted_lines = rendered_dialogues(gal_events[aid][group])
                 agent_gals.append({"eid": eid, "title": title, "lines": sorted_lines})
 
@@ -652,6 +661,10 @@ def _extract_agents(
         avatar_info_list.append(info)
         camp_groups[camp_name].append(info)
         agent_count += 1
+        if (machine := getattr(tm, "machine", None)) and machine.current is not None:
+            machine_output.describe(tm, name)
+            machine.profile(machine.current, faction=camp_name, agent_id=aid, config=a)
+        machine_output.end(tm)
 
     # Write Camp Files
     camp_file_map = {
@@ -678,6 +691,9 @@ def _extract_agents(
     files_to_camps: dict[str, list[str]] = defaultdict(list)
     for camp_name in camp_groups:
         fname = camp_file_map.get(camp_name, "12_漫游者与特别存在.md")
+        if machine := getattr(tm, "machine", None):
+            for info in camp_groups[camp_name]:
+                machine.documents[f"lore:agents:agent:{info['id']}"]["source_file"] = f"agents/{fname}"
         files_to_camps[fname].append(camp_name)
 
     for fname, camps in sorted(files_to_camps.items()):
@@ -799,6 +815,24 @@ def _extract_agents(
     (agents_dir / "13_未关联代理人互动.md").write_text("\n".join(unassigned_lines), encoding="utf-8")
     write_jsonl(dialogue_audit, agents_dir / "dialogue-audit.jsonl")
     write_jsonl((row for row in dialogue_audit if row["agent_id"] is None), agents_dir / "unassigned-dialogue.jsonl")
+    if machine := getattr(tm, "machine", None):
+        for row in sorted(dialogue_audit, key=lambda r: (r["scope"], r["family"], r["scene"], sequence_order(r["sequence"]), r["source_key"])):
+            if not row["retained"]:
+                continue
+            aid = row["agent_id"]
+            scene_identity = f"{row['scope']}|{row['family']}|{row.get('event_tag') or ''}|{row['scene']}"
+            if aid is not None:
+                doc = machine.documents.get(f"lore:agents:agent:{aid}")
+            else:
+                entity = scene_identity
+                doc = machine.begin("agents", entity, f"{row['scope']} · {row['scene']}",
+                                    "agents/13_未关联代理人互动.md", doc_type="interaction")
+            if doc is None:
+                raise ValueError(f"retained interaction has no agent document: {row['source_key']}")
+            kind = "bubble" if "Bubble" in row["family"] else "trust" if "GalGame" in row["family"] else "daily"
+            machine.audit(doc, "agents/dialogue-audit.jsonl", row, section_kind=kind,
+                          section_title=row["scope"], scene_id=scene_identity)
+        machine.end()
 
     return {"lore_agents": agent_count, "lore_dialogue_candidates": len(dialogue_audit),
             "lore_dialogue_removed": sum(not row["retained"] for row in dialogue_audit),
@@ -810,6 +844,7 @@ def _extract_equipment(
     tm: TextMap,
     equip_dir: Path,
     avatar_base_data: dict[str, Any] | list[Any] | None = None,
+    *, protagonist: str = "M",
 ) -> dict[str, int]:
     equip_dir.mkdir(parents=True, exist_ok=True)
 
@@ -818,15 +853,18 @@ def _extract_equipment(
     for k, v in tm.items():
         if k.startswith("EquipmentSuit_") and k.endswith("_name"):
             suit_id = k.split("_")[1]
-            name = _clean(v).strip()
-            story = _clean(tm.get(f"EquipmentSuit_{suit_id}_story", ""))
-            two_pc = _clean(tm.get(f"EquipmentSuit_{suit_id}_2_des", ""))
-            four_pc = _clean(tm.get(f"EquipmentSuit_{suit_id}_4_des", ""))
-            tag = _clean(tm.get(f"EquipmentSuit_{suit_id}_Tag", ""))
-            hint = _clean(tm.get(f"EquipmentSuit_{suit_id}_Hint", ""))
-            filter_opt = _clean(tm.get(f"EquipmentSuit_{suit_id}_SuitFilterOption", ""))
+            machine_output.begin(tm, "equipment", suit_id, v, "equipment/01_驱动盘唱片物语.md", doc_type="disc")
+            machine_output.source(tm, k)
+            name = _clean(v, protagonist=protagonist).strip()
+            story = _clean(tm.get(f"EquipmentSuit_{suit_id}_story", ""), protagonist=protagonist)
+            two_pc = _clean(tm.get(f"EquipmentSuit_{suit_id}_2_des", ""), protagonist=protagonist)
+            four_pc = _clean(tm.get(f"EquipmentSuit_{suit_id}_4_des", ""), protagonist=protagonist)
+            tag = _clean(tm.get(f"EquipmentSuit_{suit_id}_Tag", ""), protagonist=protagonist)
+            hint = _clean(tm.get(f"EquipmentSuit_{suit_id}_Hint", ""), protagonist=protagonist)
+            filter_opt = _clean(tm.get(f"EquipmentSuit_{suit_id}_SuitFilterOption", ""), protagonist=protagonist)
 
             if not story:
+                machine_output.discard(tm)
                 continue
 
             prefix = suit_id[:3]
@@ -834,12 +872,21 @@ def _extract_equipment(
             for slot in range(1, 7):
                 slot_name = ""
                 slot_des = ""
+                chosen_name_key = None
+                chosen_des_key = None
                 for r in ("4", "3", "2"):
-                    s_name = tm.get(f"Item_Equipment_{prefix}{r}{slot}_name")
-                    s_des = tm.get(f"Item_Equipment_{prefix}{r}{slot}_des")
+                    # Probing a rank is not a relation to this disc. Capture
+                    # only the name/description pair the extraction adopts.
+                    source_map = getattr(tm, "source", tm)
+                    name_key = f"Item_Equipment_{prefix}{r}{slot}_name"
+                    desc_key = f"Item_Equipment_{prefix}{r}{slot}_des"
+                    s_name = source_map.get(name_key)
+                    s_des = source_map.get(desc_key)
                     if s_des:
-                        slot_name = _clean(s_name).strip() if s_name else f"{name}[{slot}]"
-                        slot_des = _clean(s_des)
+                        chosen_name_key = name_key if s_name else None
+                        chosen_des_key = desc_key
+                        slot_name = _clean(s_name, protagonist=protagonist).strip() if s_name else f"{name}[{slot}]"
+                        slot_des = _clean(s_des, protagonist=protagonist)
                         break
                 if not slot_des:
                     target_token = f"{name}[{slot}]"
@@ -847,11 +894,17 @@ def _extract_equipment(
                         if k_item.startswith("Item_Equipment_") and k_item.endswith("_name"):
                             if v_item.strip() == target_token or v_item.strip().startswith(target_token):
                                 base_k = k_item[:-5]
-                                fallback_des = tm.get(f"{base_k}_des")
+                                fallback_des = getattr(tm, "source", tm).get(f"{base_k}_des")
                                 if fallback_des:
-                                    slot_name = _clean(v_item).strip()
-                                    slot_des = _clean(fallback_des)
+                                    chosen_name_key = k_item
+                                    chosen_des_key = f"{base_k}_des"
+                                    slot_name = _clean(v_item, protagonist=protagonist).strip()
+                                    slot_des = _clean(fallback_des, protagonist=protagonist)
                                     break
+                if chosen_name_key is not None:
+                    machine_output.source(tm, chosen_name_key)
+                if chosen_des_key is not None:
+                    machine_output.source(tm, chosen_des_key)
                 slots[slot] = {
                     "name": slot_name or f"{name}[{slot}]",
                     "des": slot_des,
@@ -875,6 +928,8 @@ def _extract_equipment(
                 "cat_icon": cat_icon,
                 "slots": slots,
             })
+            machine_output.describe(tm, name)
+            machine_output.end(tm)
 
     # Sort strictly by integer ID to eliminate ordering bugs
     discs.sort(key=lambda x: int(x["id"]) if x["id"].isdigit() else 9999)
@@ -962,7 +1017,7 @@ def _extract_equipment(
     for e in raw_entries:
         aid = str(e.get("PFOAJKNPCHL", 0))
         name_k = e.get("HAKHHHCAENA")
-        ag_name = _clean(tm.get(name_k, "")) if name_k else ""
+        ag_name = _clean(tm.get(name_k, ""), protagonist=protagonist) if name_k else ""
         camp_id = e.get("OOOHMBMDLBI") or 0
         camp_name = CAMP_ID_MAP.get(camp_id, "特别存在")
         if ag_name:
@@ -977,18 +1032,18 @@ def _extract_equipment(
     aid_to_agent.setdefault("1531", ("星徽·比利", "狡兔屋"))
 
     engines: list[dict[str, Any]] = []
-    seen_engine_names: set[str] = set()
 
     for k, v in tm.items():
         if k.startswith("Item_Weapon_") and k.endswith("_Name"):
             base = k[:-5]
+            machine_output.begin(tm, "equipment", base, v, "equipment/02_音擎档案与题记.md", doc_type="weapon")
+            machine_output.source(tm, k)
             desc_raw = tm.get(f"{base}_Desc", "")
             if not desc_raw or desc_raw.startswith("Test"):
+                machine_output.discard(tm)
                 continue
 
-            name = _clean(v).strip()
-            if name in seen_engine_names:
-                continue
+            name = _clean(v, protagonist=protagonist).strip()
 
             parts = base.split("_")
             rank = parts[2] if len(parts) > 2 else "A"
@@ -1033,26 +1088,26 @@ def _extract_equipment(
                     tid = f"14{cnum:03d}"
                     sort_sub = (1, cnum)
 
-            talent_title = _clean(tm.get(f"Weapon_TalentTitle_{tid}", "")) if tid else ""
-            talent_des_r1 = _clean(tm.get(f"Weapon_TalentDes_8{tid}01", "")) if tid else ""
-            talent_des_r5 = _clean(tm.get(f"Weapon_TalentDes_8{tid}05", "")) if tid else ""
+            talent_title = _clean(tm.get(f"Weapon_TalentTitle_{tid}", ""), protagonist=protagonist) if tid else ""
+            talent_des_r1 = _clean(tm.get(f"Weapon_TalentDes_8{tid}01", ""), protagonist=protagonist) if tid else ""
+            talent_des_r5 = _clean(tm.get(f"Weapon_TalentDes_8{tid}05", ""), protagonist=protagonist) if tid else ""
 
             # Fallbacks for unit test mock keys
-            special = _clean(tm.get(f"{base}_SpecialDesc", ""))
-            buff_name = _clean(tm.get(f"{base}_Buff_Name", ""))
-            buff_des = _clean(tm.get(f"{base}_Buff_Des", ""))
+            special = _clean(tm.get(f"{base}_SpecialDesc", ""), protagonist=protagonist)
+            buff_name = _clean(tm.get(f"{base}_Buff_Name", ""), protagonist=protagonist)
+            buff_des = _clean(tm.get(f"{base}_Buff_Des", ""), protagonist=protagonist)
 
-            short_desc = _clean(tm.get(f"{base}_ShortDesc", ""))
+            short_desc = _clean(tm.get(f"{base}_ShortDesc", ""), protagonist=protagonist)
 
             # Quote & story splitting
             blocks = [b.strip() for b in desc_raw.split("\n\n") if b.strip()]
             story_part = ""
             quote_part = ""
             if len(blocks) >= 2 and ("「" in blocks[-1] or "——" in blocks[-1]):
-                story_part = _clean("\n\n".join(blocks[:-1]))
-                quote_part = _clean(blocks[-1])
+                story_part = _clean("\n\n".join(blocks[:-1]), protagonist=protagonist)
+                quote_part = _clean(blocks[-1], protagonist=protagonist)
             else:
-                cleaned_all = _clean(desc_raw)
+                cleaned_all = _clean(desc_raw, protagonist=protagonist)
                 if "「" in cleaned_all and "——" in cleaned_all:
                     idx = cleaned_all.rfind("「")
                     story_part = cleaned_all[:idx].strip()
@@ -1068,8 +1123,8 @@ def _extract_equipment(
             is_exclusive = bool(owner_agent or final_quote)
             cat_label = f"专属特化（{owner_agent}）" if owner_agent else ("专属特化" if is_exclusive else "标准量产")
 
-            seen_engine_names.add(name)
             engines.append({
+                "source_id": base,
                 "name": name,
                 "rank": rank,
                 "sort_key": (sort_rank, sort_sub, name),
@@ -1083,6 +1138,8 @@ def _extract_equipment(
                 "skill_des_r1": final_skill_r1,
                 "skill_des_r5": talent_des_r5,
             })
+            machine_output.describe(tm, name)
+            machine_output.end(tm)
 
     # Sort strictly by rank, signature-first, then ID/number
     engines.sort(key=lambda x: x["sort_key"])
@@ -1145,18 +1202,20 @@ def _extract_equipment(
             bid = k.replace("Bangboo_Name_", "")
             if bid in ("50002", "57001"):  # Filter internal test / dummy non-units
                 continue
-            name = _clean(v)
-            desc = _clean(tm.get(f"Bangboo_Desc_{bid}", ""))
-            en_name = _clean(tm.get(f"Bangboo_Name_en_{bid}", ""))
-            act_title = _clean(tm.get(f"Bangboo_ActiveSkill_Title_{bid}", ""))
-            act_des = _clean(tm.get(f"Bangboo_ActiveSkill_Des_{bid}", ""))
-            qte_title = _clean(tm.get(f"Bangboo_QTE_Title_{bid}", ""))
-            qte_des = _clean(tm.get(f"Bangboo_QTE_Des_{bid}", ""))
-            talent_title = _clean(tm.get(f"Bangboo_TalentSkill_Title_{bid}", ""))
-            talent_des_lv1 = _clean(tm.get(f"Bangboo_TalentSkill_Des_{bid}_01", ""))
-            talent_des_lv5 = _clean(tm.get(f"Bangboo_TalentSkill_Des_{bid}_05", ""))
-            tarot_name = _clean(tm.get(f"TarotCard_10{bid}_name", ""))
-            tarot_des = _clean(tm.get(f"TarotCard_10{bid}_des", ""))
+            machine_output.begin(tm, "equipment", bid, v, "equipment/03_邦布机体图鉴.md", doc_type="bangboo")
+            machine_output.source(tm, k)
+            name = _clean(v, protagonist=protagonist)
+            desc = _clean(tm.get(f"Bangboo_Desc_{bid}", ""), protagonist=protagonist)
+            en_name = _clean(tm.get(f"Bangboo_Name_en_{bid}", ""), protagonist=protagonist)
+            act_title = _clean(tm.get(f"Bangboo_ActiveSkill_Title_{bid}", ""), protagonist=protagonist)
+            act_des = _clean(tm.get(f"Bangboo_ActiveSkill_Des_{bid}", ""), protagonist=protagonist)
+            qte_title = _clean(tm.get(f"Bangboo_QTE_Title_{bid}", ""), protagonist=protagonist)
+            qte_des = _clean(tm.get(f"Bangboo_QTE_Des_{bid}", ""), protagonist=protagonist)
+            talent_title = _clean(tm.get(f"Bangboo_TalentSkill_Title_{bid}", ""), protagonist=protagonist)
+            talent_des_lv1 = _clean(tm.get(f"Bangboo_TalentSkill_Des_{bid}_01", ""), protagonist=protagonist)
+            talent_des_lv5 = _clean(tm.get(f"Bangboo_TalentSkill_Des_{bid}_05", ""), protagonist=protagonist)
+            tarot_name = _clean(tm.get(f"TarotCard_10{bid}_name", ""), protagonist=protagonist)
+            tarot_des = _clean(tm.get(f"TarotCard_10{bid}_des", ""), protagonist=protagonist)
 
             # Handle Special / Eous
             if bid == "50001":
@@ -1186,6 +1245,7 @@ def _extract_equipment(
 
             # Filter out entries with neither description nor skills
             if not desc and not act_title and not qte_title:
+                machine_output.discard(tm)
                 continue
 
             # Synergy mapping
@@ -1200,7 +1260,7 @@ def _extract_equipment(
             # Voice lines
             voice_lines: list[str] = []
             for i in range(1, 15):
-                line = _clean(tm.get(f"Tips_{bid}0{i}", tm.get(f"Tips_{bid}{i:02d}", "")))
+                line = _clean(tm.get(f"Tips_{bid}0{i}", tm.get(f"Tips_{bid}{i:02d}", "")), protagonist=protagonist)
                 if line and line not in voice_lines:
                     voice_lines.append(line)
 
@@ -1208,7 +1268,7 @@ def _extract_equipment(
             tactical_tips: list[str] = []
             if bid == "50001":
                 for i in range(101, 125):
-                    tline = _clean(tm.get(f"Tips_50001{i}", ""))
+                    tline = _clean(tm.get(f"Tips_50001{i}", ""), protagonist=protagonist)
                     if tline and tline not in tactical_tips:
                         tactical_tips.append(tline)
 
@@ -1234,6 +1294,8 @@ def _extract_equipment(
                 "voices": voice_lines,
                 "tactical_tips": tactical_tips,
             })
+            machine_output.describe(tm, name)
+            machine_output.end(tm)
 
     # Canonical sorting: S-Rank (540xx) -> A-Rank (530xx) -> Special (50001), strictly numerical ID ascending
     def _bangboo_sort_key(b: dict[str, Any]) -> tuple[int, int]:
@@ -1338,12 +1400,16 @@ def _extract_equipment(
             cid = k.replace("CollectionDesc_", "")
             if not cid.isdigit():
                 continue
-            name = _clean(tm.get(f"CollectionName_{cid}", f"藏品 {cid}"))
-            raw_text = clean_text(v).text.strip()
+            machine_output.begin(tm, "equipment", cid, cid, "equipment/04_收藏展架与风味展品.md", doc_type="collectible")
+            machine_output.source(tm, k)
+            name = _clean(tm.get(f"CollectionName_{cid}", f"藏品 {cid}"), protagonist=protagonist)
+            raw_text = clean_text(v, protagonist=protagonist).text.strip()
             if not raw_text or len(raw_text) < 5:
+                machine_output.discard(tm)
                 continue
             # Filter internal test dummy data
             if "测试数据" in name or "测试数据" in raw_text:
+                machine_output.discard(tm)
                 continue
 
             # Parse quote if present: 「...」——... or ...——...
@@ -1427,6 +1493,8 @@ def _extract_equipment(
                 "cat_order": cat_order,
                 "sub": sub,
             })
+            machine_output.describe(tm, name)
+            machine_output.end(tm)
 
     # Canonical sorting: Category (0..3) -> Numerical CID ascending
     def _col_sort_key(c: dict[str, Any]) -> tuple[int, int]:
@@ -1492,7 +1560,8 @@ def _extract_equipment(
     }
 
 
-def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | None = None) -> dict[str, int]:
+def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | None = None,
+                      protagonist: str = "M") -> dict[str, int]:
     knot_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Forum posts (PostTitle_*, Poster_*, PostText_*, PostScript_*, Comment<N>_*, Commentator<N>_*)
@@ -1500,16 +1569,18 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
     for k in tm.keys():
         if k.startswith("PostTitle_"):
             pid = k.replace("PostTitle_", "")
-            title = _clean(tm.get(k, ""))
+            machine_output.begin(tm, "interknot", pid, pid, "interknot/01_委托人任务档案.md", doc_type="post")
+            title = _clean(tm.get(k, ""), protagonist=protagonist)
             if not title:
+                machine_output.discard(tm)
                 continue
-            poster = _clean(tm.get(f"Poster_{pid}", "匿名绳匠"))
-            text = _clean(tm.get(f"PostText_{pid}", ""))
-            script = _clean(tm.get(f"PostScript_{pid}", ""))
+            poster = _clean(tm.get(f"Poster_{pid}", "匿名绳匠"), protagonist=protagonist)
+            text = _clean(tm.get(f"PostText_{pid}", ""), protagonist=protagonist)
+            script = _clean(tm.get(f"PostScript_{pid}", ""), protagonist=protagonist)
             comments: list[dict[str, Any]] = []
             for i in range(1, 20):
-                ct = _clean(tm.get(f"Comment{i}_{pid}", ""))
-                cu = _clean(tm.get(f"Commentator{i}_{pid}", ""))
+                ct = _clean(tm.get(f"Comment{i}_{pid}", ""), protagonist=protagonist)
+                cu = _clean(tm.get(f"Commentator{i}_{pid}", ""), protagonist=protagonist)
                 if ct:
                     comments.append({"floor": i, "user": cu or "热心网友", "text": ct})
 
@@ -1534,6 +1605,8 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
                 "script": script,
                 "comments": comments,
             })
+            machine_output.describe(tm, title)
+            machine_output.end(tm)
 
     def _post_sort_key(p: dict[str, Any]) -> tuple[int, int | str]:
         pid = p["pid"]
@@ -1547,41 +1620,48 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
         if not k.startswith("QuestName_"):
             continue
         qid = k.replace("QuestName_", "")
-        name = _clean(tm.get(k, ""))
+        machine_output.begin(tm, "interknot", qid, qid, "interknot/01_委托人任务档案.md", doc_type="quest")
+        name = _clean(tm.get(k, ""), protagonist=protagonist)
         if not name or "测试" in name or "test" in name.lower() or "temp" in name.lower() or "随意叠放" in name:
+            machine_output.discard(tm)
             continue
         # Filter out 3-star achievements (handled as child property of parent)
         if len(qid) == 10 and (qid.endswith("50") or qid.endswith("51") or qid.endswith("52")):
+            machine_output.discard(tm)
             continue
         # Filter pure step checkpoints if parent exists
         if len(qid) == 10 and f"QuestName_{qid[:8]}" in tm:
+            machine_output.discard(tm)
             continue
 
-        desc = _clean(tm.get(f"QuestDesc_{qid}", ""))
-        target = _clean(tm.get(f"QuestTarget_{qid}", ""))
-        client = _clean(tm.get(f"HollowClient_{qid}", ""))
+        desc = _clean(tm.get(f"QuestDesc_{qid}", ""), protagonist=protagonist)
+        target = _clean(tm.get(f"QuestTarget_{qid}", ""), protagonist=protagonist)
+        client = _clean(tm.get(f"HollowClient_{qid}", ""), protagonist=protagonist)
 
         if not desc and not target and not client:
+            machine_output.discard(tm)
             continue
         if desc in ["TBD", "占位", "待定", "待补充"]:
+            machine_output.discard(tm)
             continue
         if len(desc) < 6 and not target and not client:
+            machine_output.discard(tm)
             continue
 
-        map_name = _clean(tm.get(f"BigSceneMapName_4{qid}", ""))
-        map_desc = _clean(tm.get(f"BigSceneMapDes_4{qid}", ""))
+        map_name = _clean(tm.get(f"BigSceneMapName_4{qid}", ""), protagonist=protagonist)
+        map_desc = _clean(tm.get(f"BigSceneMapDes_4{qid}", ""), protagonist=protagonist)
 
         achievements: list[tuple[str, str]] = []
         for suffix in ["50", "51", "52"]:
             ach_id = f"{qid}{suffix}"
-            aname = _clean(tm.get(f"HollowAchivementName_{ach_id}", ""))
-            adesc = _clean(tm.get(f"HollowAchivementDesc_{ach_id}", ""))
+            aname = _clean(tm.get(f"HollowAchivementName_{ach_id}", ""), protagonist=protagonist)
+            adesc = _clean(tm.get(f"HollowAchivementDesc_{ach_id}", ""), protagonist=protagonist)
             if aname:
                 achievements.append((aname, adesc))
 
         in_targets: list[str] = []
         for step in ["01", "02", "03", "04", "05"]:
-            it = _clean(tm.get(f"InHollowTarget_{qid}{step}", ""))
+            it = _clean(tm.get(f"InHollowTarget_{qid}{step}", ""), protagonist=protagonist)
             if it and it not in in_targets:
                 in_targets.append(it)
 
@@ -1596,6 +1676,8 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
             "achievements": achievements,
             "in_targets": in_targets,
         })
+        machine_output.describe(tm, name)
+        machine_output.end(tm)
 
     def _quest_sort_key(q: dict[str, Any]) -> tuple[int, int | str]:
         qid = q["id"]
@@ -1812,10 +1894,10 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
             tid, seq = mid[:-2], mid[-2:]
         else:
             tid, seq = "unassigned", mid
-        text = _clean(v)
+        text = _clean(v, protagonist=protagonist)
         if not text:
             unrendered_message_sources.append({"source_key": k, "thread_id": tid, "sequence": seq,
-                                               "raw_text": v, "text": text, "text_variants": clean_text(v).variants,
+                                               "raw_text": v, "text": text, "text_variants": clean_text(v, protagonist=protagonist).variants,
                                                "retained": False, "reason": "empty_text",
                                                "sender": identity["sender"], "sender_status": identity["sender_status"],
                                                "sender_source": identity["sender_source"],
@@ -1828,9 +1910,9 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
     for k, v in tm.items():
         if k.startswith("SenderNote1_"):
             cid = k[len("SenderNote1_"):]
-            n1 = _clean(tm.get(f"SenderNote1_{cid}", ""))
-            n2 = _clean(tm.get(f"SenderNote2_{cid}", ""))
-            n3 = _clean(tm.get(f"SenderNote3_{cid}", ""))
+            n1 = _clean(tm.get(f"SenderNote1_{cid}", ""), protagonist=protagonist)
+            n2 = _clean(tm.get(f"SenderNote2_{cid}", ""), protagonist=protagonist)
+            n3 = _clean(tm.get(f"SenderNote3_{cid}", ""), protagonist=protagonist)
             if n1 or n2 or n3:
                 trust_memos[cid] = (n1, n2, n3)
 
@@ -1890,7 +1972,7 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
             return (name, "配置通讯对象", name)
         if tid_str in metadata.get("contacts", {}):
             return (f"未关联联系人 #{tid_str}", "配置姓名未解析", f"短信配置 #{tid_str}")
-        tname = _clean(tm.get(f"Message_{tid_str}_name", ""))
+        tname = _clean(tm.get(f"Message_{tid_str}_name", ""), protagonist=protagonist)
         if tname:
             return (tname, "街区通讯", tname)
         if tid_str in ("9708",) or tid_str.startswith(("9900", "6004")):
@@ -1944,10 +2026,11 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
         if configured_contact.get("contact"):
             contact_str = configured_contact["contact"]
             contact_source = "message_group_config"
-        ct = clean_text(raw_str)
+        ct = clean_text(raw_str, protagonist=protagonist)
         message_audit.append({
             "source_key": source_key, "thread_id": tid, "sequence": seq_str,
             "raw_text": raw_str, "text": text_str, "text_variants": ct.variants,
+            "selected_variant": machine_output.selected_variant(ct, protagonist),
             "retained": True, "reason": None,
             "contact_candidate": contact_str, "contact_source": contact_source,
             "sender": sender, "sender_status": "resolved" if sender else "unresolved",
@@ -1979,7 +2062,7 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
             street_threads.append(tid)
             continue
 
-        poster = _clean(tm.get(f"Poster_{tid}", ""))
+        poster = _clean(tm.get(f"Poster_{tid}", ""), protagonist=protagonist)
         if poster or (len(tid) == 4 and tid.isdigit() and int(tid) in range(1000, 3000)):
             client_threads.append(tid)
             continue
@@ -2013,7 +2096,7 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
                 m_sorted = sorted(lines, key=lambda x: x[0])
                 first_text = m_sorted[0][1].replace("\n", " ").replace("|", "—") if m_sorted else "—"
                 snippet = first_text[:28] + ("..." if len(first_text) > 28 else "")
-                tname = _clean(tm.get(f"Message_{tid}_name", ""))
+                tname = _clean(tm.get(f"Message_{tid}_name", ""), protagonist=protagonist)
                 title = tname if tname else snippet
                 msg_md.append(f"| `#{tid}` | **{aname}** · {title} | {camp_name}（代理人通讯） | {len(lines)} 条 | {snippet} |")
 
@@ -2022,9 +2105,9 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
         m_sorted = sorted(lines, key=lambda x: x[0])
         first_text = m_sorted[0][1].replace("\n", " ").replace("|", "—") if m_sorted else "—"
         snippet = first_text[:28] + ("..." if len(first_text) > 28 else "")
-        poster = _clean(tm.get(f"Poster_{tid}", ""))
+        poster = _clean(tm.get(f"Poster_{tid}", ""), protagonist=protagonist)
         cname = poster if poster else f"委托人 #{tid}"
-        quest = _clean(tm.get(f"Quest_{tid}", ""))
+        quest = _clean(tm.get(f"Quest_{tid}", ""), protagonist=protagonist)
         title = f"《{quest}》跟进" if quest else snippet
         msg_md.append(f"| `#{tid}` | **{cname}** · {title} | 绳网业务委托 | {len(lines)} 条 | {snippet} |")
 
@@ -2077,7 +2160,7 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
                 lines = threads[tid]
                 m_sorted = sorted(lines, key=lambda x: x[0])
                 first_text = m_sorted[0][1].replace("\n", " ").strip() if m_sorted else ""
-                tname = _clean(tm.get(f"Message_{tid}_name", ""))
+                tname = _clean(tm.get(f"Message_{tid}_name", ""), protagonist=protagonist)
                 title = tname if tname else (first_text[:24] + ("..." if len(first_text) > 24 else ""))
                 msg_md.append(f"##### 频段 #{tid} · {title}\n")
                 for seq, text, raw, key in m_sorted:
@@ -2092,8 +2175,8 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
             lines = threads[tid]
             m_sorted = sorted(lines, key=lambda x: x[0])
             first_text = m_sorted[0][1].replace("\n", " ").strip() if m_sorted else ""
-            poster = _clean(tm.get(f"Poster_{tid}", ""))
-            quest = _clean(tm.get(f"Quest_{tid}", ""))
+            poster = _clean(tm.get(f"Poster_{tid}", ""), protagonist=protagonist)
+            quest = _clean(tm.get(f"Quest_{tid}", ""), protagonist=protagonist)
             cname = poster if poster else f"委托人 #{tid}"
             title = f"《{quest}》跟进" if quest else (first_text[:24] + ("..." if len(first_text) > 24 else ""))
             msg_md.append(f"### 频段 #{tid} · {cname} · {title}\n")
@@ -2131,10 +2214,11 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
         if key in referenced_keys:
             continue
         raw = tm.get(key)
-        ct = clean_text(raw)
+        ct = clean_text(raw, protagonist=protagonist)
         identity = source_identity(metadata, key)
         extra_sources.append({"source_key": key, "raw_text": raw, "text": ct.text,
                               "text_variants": ct.variants, "config_references": refs,
+                              "selected_variant": machine_output.selected_variant(ct, protagonist),
                               "sender": identity["sender"], "sender_status": identity["sender_status"],
                               "sender_source": identity["sender_source"],
                               "retained": bool(ct.text), "reason": None if ct.text else "empty_text",
@@ -2175,6 +2259,35 @@ def _extract_interknot(tm: TextMap, knot_dir: Path, *, message_metadata: dict | 
     write_jsonl(metadata.get("items", []), knot_dir / "message-item-audit.jsonl")
     (knot_dir / "02_绳网私信与手机短信.md").write_text("\n".join(msg_md), encoding="utf-8")
     write_jsonl(message_audit, knot_dir / "message-audit.jsonl")
+    if machine := getattr(tm, "machine", None):
+        source_file = "interknot/02_绳网私信与手机短信.md"
+        for record_source, rows in [("interknot/message-audit.jsonl", message_audit),
+                                    ("interknot/message-extra-sources.jsonl", extra_sources)]:
+            for row in sorted(rows, key=lambda r: (sequence_order(r.get("sequence", r["source_key"])), r["source_key"])):
+                if not row["retained"]:
+                    continue
+                threads_for_row = {ref["thread_id"] for ref in row.get("config_references", [])}
+                if not threads_for_row:
+                    threads_for_row = {row.get("thread_id", row["source_key"])}
+                for tid in sorted(threads_for_row):
+                    contact = metadata.get("contacts", {}).get(tid, {}).get("contact")
+                    doc = machine.begin("interknot", tid, contact or f"频段 {tid}", source_file, doc_type="message")
+                    machine.audit(doc, record_source, row, section_kind="daily", section_title="短信",
+                                  scene_id=tid, scene_title=contact)
+        for item in metadata.get("items", []):
+            for ref in item["references"]:
+                if not ref.get("text"):
+                    continue
+                doc = machine.begin("interknot", str(item["item_id"]), f"短信附件 {item['item_id']}",
+                                    source_file, doc_type="attachment")
+                machine.audit(doc, "interknot/message-item-audit.jsonl", ref,
+                              section_kind="other", section_title="附件文本")
+        for key in trust_memos:
+            cid = key
+            doc = machine.begin("interknot", cid, f"信托手记 {cid}", source_file, doc_type="trust")
+            for prefix in ("SenderNote1_", "SenderNote2_", "SenderNote3_"):
+                machine.source(prefix + cid, section_kind="trust")
+        machine.end()
 
     return {"lore_quests": len(consolidated) + len(forum_posts), "lore_messages": msg_count,
             "lore_message_sender_unresolved": sum(row["sender_status"] == "unresolved" for row in message_audit),
@@ -2220,7 +2333,7 @@ FILM_QUOTE_RANGES: dict[int, range] = {
 }
 
 
-def _extract_cinema(tm: TextMap, cinema_dir: Path) -> dict[str, int]:
+def _extract_cinema(tm: TextMap, cinema_dir: Path, *, protagonist: str = "M") -> dict[str, int]:
     cinema_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Collect all comments from tm
@@ -2228,11 +2341,15 @@ def _extract_cinema(tm: TextMap, cinema_dir: Path) -> dict[str, int]:
     for k, v in tm.items():
         if k.startswith("Cinema_Comment_") and k.endswith("_Content"):
             cid = k[len("Cinema_Comment_"):-len("_Content")]
-            content = _clean(v)
+            machine_output.begin(tm, "cinema", cid, f"影评 {cid}", "cinema/01_旧文明电影与影评.md", doc_type="comment")
+            machine_output.source(tm, k, section_kind="commentary")
+            content = _clean(v, protagonist=protagonist)
             if content:
                 name_k = f"Cinema_Comment_{cid}_Name"
-                name = _clean(tm.get(name_k, "热心影迷")) or "热心影迷"
+                name = _clean(tm.get(name_k, "热心影迷"), protagonist=protagonist) or "热心影迷"
                 all_comments[cid] = {"name": name, "content": content}
+                machine_output.describe(tm, name)
+            machine_output.end(tm)
 
     # Store manager reflections: cid "1" (铃) and "2" (哲)
     manager_reflections: list[tuple[str, str, str]] = []
@@ -2275,10 +2392,12 @@ def _extract_cinema(tm: TextMap, cinema_dir: Path) -> dict[str, int]:
             spk_k = f"Cinema_SpeakerName_6102000{q_idx:02d}"
             txt_k = f"Cinema_DoubleDate_6102000{q_idx:02d}"
             if txt_k in tm or spk_k in tm:
-                spk = _clean(tm.get(spk_k, ""))
-                txt = _clean(tm.get(txt_k, ""))
+                machine_output.begin(tm, "cinema", str(mid), f"影片 {mid}", "cinema/01_旧文明电影与影评.md", doc_type="movie")
+                spk = _clean(tm.get(spk_k, ""), protagonist=protagonist)
+                txt = _clean(tm.get(txt_k, ""), protagonist=protagonist)
                 if txt:
                     q_list.append((spk, txt))
+                machine_output.end(tm)
         if q_list:
             movie_quotes[mid] = q_list
 
@@ -2289,20 +2408,21 @@ def _extract_cinema(tm: TextMap, cinema_dir: Path) -> dict[str, int]:
         name_k = f"Cinema_CinemaConfig_{i:02d}_Name"
         title_k = f"Cinema_CinemaConfig_{i:02d}_Tittle"
         if desc_k in tm or name_k in tm or title_k in tm:
-            desc = _clean(tm.get(desc_k, ""))
-            name = _clean(tm.get(title_k, tm.get(name_k, f"经典影片 #{i:02d}")))
+            machine_output.begin(tm, "cinema", str(i), f"影片 {i}", "cinema/01_旧文明电影与影评.md", doc_type="movie")
+            desc = _clean(tm.get(desc_k, ""), protagonist=protagonist)
+            name = _clean(tm.get(title_k, tm.get(name_k, f"经典影片 #{i:02d}")), protagonist=protagonist)
 
             # Tags
             tags: list[str] = []
             tag_k = f"Cinema_CinemaConfig_Tag_{i:02d}"
             if tag_k in tm:
-                t = _clean(tm.get(tag_k, ""))
+                t = _clean(tm.get(tag_k, ""), protagonist=protagonist)
                 if t and t not in tags:
                     tags.append(t)
             for sub in [1, 2, 3]:
                 sub_k = f"Cinema_CinemaConfig_Tag_{i:02d}_{sub}"
                 if sub_k in tm:
-                    t = _clean(tm.get(sub_k, ""))
+                    t = _clean(tm.get(sub_k, ""), protagonist=protagonist)
                     if t and t not in tags:
                         tags.append(t)
             tag_str = " / ".join(tags) if tags else "经典电影"
@@ -2321,9 +2441,19 @@ def _extract_cinema(tm: TextMap, cinema_dir: Path) -> dict[str, int]:
                     "comments": m_comments,
                     "quotes": m_quotes,
                 })
+                machine_output.describe(tm, name)
+            machine_output.end(tm)
 
     # Sort movies strictly ascending by num_id
     movies.sort(key=lambda x: x["num_id"])
+    if machine := getattr(tm, "machine", None):
+        for movie in movies:
+            doc = machine.documents.get(f"lore:cinema:movie:{movie['num_id']}")
+            if doc is None:
+                continue
+            for cid, _, _ in movie["comments"]:
+                machine.merge_sources(doc, f"lore:cinema:comment:{cid}", section_kind="commentary", scene_id=cid)
+        machine.end()
 
     # 4. Generate Markdown
     c_md = ["# Random Play 录像店旧文明电影与大众影评\n"]
@@ -2427,7 +2557,7 @@ EMERGENCY_MEDS: dict[str, str] = {
 }
 
 
-def _extract_glossary(tm: TextMap, gloss_dir: Path) -> dict[str, int]:
+def _extract_glossary(tm: TextMap, gloss_dir: Path, *, protagonist: str = "M") -> dict[str, int]:
     gloss_dir.mkdir(parents=True, exist_ok=True)
 
     # =========================================================================
@@ -2437,29 +2567,42 @@ def _extract_glossary(tm: TextMap, gloss_dir: Path) -> dict[str, int]:
     for k, v in tm.items():
         if k.startswith("MainStoryChapterNumber_"):
             cid = k.replace("MainStoryChapterNumber_", "")
+            machine_output.begin(tm, "glossary", cid, cid, "glossary/01_空洞与以太规则.md", doc_type="chapter")
+            machine_output.source(tm, k)
             name_k = f"MainStoryChapterName_{cid}"
-            num = _clean(v)
-            name = _clean(tm.get(name_k, "")).replace("\xa0", " ")
+            num = _clean(v, protagonist=protagonist)
+            name = _clean(tm.get(name_k, ""), protagonist=protagonist).replace("\xa0", " ")
             guide = CHAPTER_GUIDES.get(cid, (num, "主线剧情深入推进"))[1]
             if name and name != "未完待续…":
                 chapters.append((cid, num, name, guide))
+                machine_output.describe(tm, name)
+                machine_output.end(tm)
+            else:
+                machine_output.discard(tm)
 
     for k, v in tm.items():
         if k.startswith("SpecialEpisodesChapterName_"):
             cid = k.replace("SpecialEpisodesChapterName_", "")
-            name = _clean(v).replace("\xa0", " ")
+            machine_output.begin(tm, "glossary", cid, cid, "glossary/01_空洞与以太规则.md", doc_type="special")
+            machine_output.source(tm, k)
+            name = _clean(v, protagonist=protagonist).replace("\xa0", " ")
             guide = CHAPTER_GUIDES.get(cid, (f"SP-{cid}", "独家视界代理人特别篇"))[1]
             chapters.append((cid, f"SP-{cid}", f"独家视界·{name}", guide))
+            machine_output.describe(tm, name)
+            machine_output.end(tm)
 
     # Fallback if no MainStoryChapterNumber found (e.g. minimal mock test data)
     if not chapters:
         for k, v in tm.items():
             if k.startswith("ChapterTipsMain_"):
                 cid = k.replace("ChapterTipsMain_", "")
-                cleaned_val = _clean(v).replace("\xa0", " ")
+                cleaned_val = _clean(v, protagonist=protagonist).replace("\xa0", " ")
                 if "临时" not in cleaned_val and "OB-" not in cleaned_val:
+                    machine_output.begin(tm, "glossary", cid, cleaned_val, "glossary/01_空洞与以太规则.md", doc_type="chapter-tip")
+                    machine_output.source(tm, k)
                     guide = CHAPTER_GUIDES.get(cid, (f"幕次 {cid}", "官方剧情纪事"))[1]
                     chapters.append((cid, f"幕次 {cid}", cleaned_val, guide))
+                    machine_output.end(tm)
 
     chapters.sort(key=lambda x: int(x[0]) if x[0].isdigit() else 99999)
 
@@ -2472,11 +2615,15 @@ def _extract_glossary(tm: TextMap, gloss_dir: Path) -> dict[str, int]:
     # 1. Canonical loading screen tips
     for k, v in sorted(tm.items()):
         if k.startswith("LoadingTips_"):
-            cleaned = _clean(v)
-            if cleaned and len(cleaned) > 15 and cleaned not in seen_tips:
+            cleaned = _clean(v, protagonist=protagonist)
+            if cleaned and len(cleaned) > 15:
                 if not any(token in cleaned for token in ["点击[", "按键", "滑动翻页", "拖拽画面", "请重试"]):
-                    seen_tips.add(cleaned)
-                    tips.append(cleaned)
+                    machine_output.begin(tm, "glossary", k, "世界观提示", "glossary/01_空洞与以太规则.md", doc_type="tip")
+                    machine_output.source(tm, k)
+                    machine_output.end(tm)
+                    if cleaned not in seen_tips:
+                        seen_tips.add(cleaned)
+                        tips.append(cleaned)
 
     # 2. Key worldbuilding tips from Tips_
     lore_keywords = ["以太", "空洞", "侵蚀", "治安", "绳匠", "盗洞客", "防卫军", "赫利俄斯", "新艾利都", "旧都", "邦布", "音擎", "秽息"]
@@ -2484,10 +2631,14 @@ def _extract_glossary(tm: TextMap, gloss_dir: Path) -> dict[str, int]:
         if k.startswith("Tips_") and len(v) > 20:
             if not any(token in v for token in ["LAYOUT_", "Action:UI", "IconMap:", "点击[", "按键", "tab", "Tab", "切远程", "禁用中"]):
                 if any(w in v for w in lore_keywords):
-                    cleaned = _clean(v)
-                    if cleaned and cleaned not in seen_tips:
-                        seen_tips.add(cleaned)
-                        tips.append(cleaned)
+                    cleaned = _clean(v, protagonist=protagonist)
+                    if cleaned:
+                        machine_output.begin(tm, "glossary", k, "世界观提示", "glossary/01_空洞与以太规则.md", doc_type="tip")
+                        machine_output.source(tm, k)
+                        machine_output.end(tm)
+                        if cleaned not in seen_tips:
+                            seen_tips.add(cleaned)
+                            tips.append(cleaned)
 
     # =========================================================================
     # Part 3: Erosion Symptoms / Corruption Pathology (01_空洞与以太规则.md)
@@ -2497,9 +2648,11 @@ def _extract_glossary(tm: TextMap, gloss_dir: Path) -> dict[str, int]:
     for k, v in sorted(tm.items()):
         if k.startswith("Curse_") and k.endswith("_story"):
             cid = k.split("_")[1]
-            story = _clean(v)
-            name = _clean(tm.get(f"Curse_{cid}_name", ""))
-            des = _clean(tm.get(f"Curse_{cid}_des", ""))
+            machine_output.begin(tm, "glossary", cid, cid, "glossary/01_空洞与以太规则.md", doc_type="curse")
+            machine_output.source(tm, k)
+            story = _clean(v, protagonist=protagonist)
+            name = _clean(tm.get(f"Curse_{cid}_name", ""), protagonist=protagonist)
+            des = _clean(tm.get(f"Curse_{cid}_des", ""), protagonist=protagonist)
             if story and name and story not in seen_curse_stories:
                 seen_curse_stories.add(story)
                 curses.append({
@@ -2508,6 +2661,11 @@ def _extract_glossary(tm: TextMap, gloss_dir: Path) -> dict[str, int]:
                     "des": des,
                     "story": story,
                 })
+            if story and name:
+                machine_output.describe(tm, name)
+                machine_output.end(tm)
+            else:
+                machine_output.discard(tm)
 
     curses.sort(key=lambda x: int(x["id"]) if x["id"].isdigit() else 99999)
 
@@ -2565,13 +2723,19 @@ def _extract_glossary(tm: TextMap, gloss_dir: Path) -> dict[str, int]:
             tid = k.split("_")[1]
             if not tid.isdigit():
                 continue
-            name = _clean(tm.get(f"TarotCard_{tid}_name", tm.get(f"TarotCard_{tid}_Name", f"鸣徽 #{tid}")))
+            machine_output.begin(tm, "glossary", tid, tid, "glossary/02_空洞鸣徽与古物预言.md", doc_type="tarot")
+            machine_output.source(tm, k)
+            name = _clean(tm.get(f"TarotCard_{tid}_name", tm.get(f"TarotCard_{tid}_Name", f"鸣徽 #{tid}")), protagonist=protagonist)
             if tid in EMERGENCY_MEDS and name.startswith("鸣徽 #"):
                 name = EMERGENCY_MEDS[tid]
-            des = _clean(tm.get(f"TarotCard_{tid}_des", ""))
-            story = _clean(v)
+            des = _clean(tm.get(f"TarotCard_{tid}_des", ""), protagonist=protagonist)
+            story = _clean(v, protagonist=protagonist)
             if story and name not in ("鸣徽信息", "无货"):
                 tarots.append({"id": tid, "name": name, "des": des, "story": story})
+                machine_output.describe(tm, name)
+                machine_output.end(tm)
+            else:
+                machine_output.discard(tm)
 
     # Sort strictly by numeric ID ascending
     tarots.sort(key=lambda x: int(x["id"]) if x["id"].isdigit() else 99999)

@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -182,12 +183,13 @@ def cs_chapter(token: str) -> tuple[str, str, int]:
     return f"CS_{token}", f"过场动画（{token}）", 900 * CHAPTER_ORDER_SCALE
 
 
-def _load_scene_titles(data_paths: dict[str, Path], text_map: TextMap) -> dict[str, str]:
+def _load_scene_titles(data_paths: dict[str, Path], text_map: TextMap, *,
+                       json_loader: Callable[[Path], object] | None = None) -> dict[str, str]:
     titles: dict[str, str] = {}
     perform_path = data_paths.get("FileCfg/PerformTemplateTb.json")
     if perform_path and perform_path.exists():
         try:
-            perf = read_json(perform_path)
+            perf = (json_loader or read_json)(perform_path)
             rows = perf.get("IAEFFFFLKNB", []) if isinstance(perf, dict) else []
             for row in rows:
                 if not isinstance(row, dict):
@@ -429,6 +431,13 @@ def extract(
     out_dir.mkdir(parents=True, exist_ok=True)
     only = _normalize_chapter_filter(only_chapters)
     data_paths = ensure_data(lang=lang, refresh=refresh, data_dir=data_dir)
+    input_tables: dict[Path, object] = {}
+
+    def load_input_json(path: Path):
+        if path not in input_tables:
+            input_tables[path] = read_json(path)
+        return input_tables[path]
+
     print("Loading TextMap...")
     text_map = load_text_map(data_paths, language=lang)
     print(f"  {len(text_map)} entries loaded")
@@ -436,7 +445,9 @@ def extract(
         print(f"  chapter filter: {', '.join(sorted(only))}")
     costumes = costume_prefixes(text_map)
     print(f"  protagonist forms: {len(costumes)} ({', '.join(sorted(costumes))})")
-    scene_titles = _load_scene_titles(data_paths, text_map)
+    scene_titles = _load_scene_titles(data_paths, text_map, json_loader=load_input_json)
+    if no_speakers:
+        input_tables.clear()
     scene_order, quest_names = _load_archive_order(data_paths, text_map)
     if scene_order:
         print(f"  story archive: {len(scene_order)} ordered scenes, {len(quest_names)} quest names")
@@ -581,6 +592,7 @@ def extract(
                     "text": cleaned.text,
                     "raw_text": raw,
                     "text_variants": cleaned.variants,
+                    "selected_variant": "M" if cleaned.variants else None,
                     "order_source": "source_key",
                     "chronology_status": "unknown",
                     "context_status": "unlinked" if parsed.family == "Comic" else "chapter_only",
@@ -590,7 +602,8 @@ def extract(
 
     print(f"  line keys: {stats.line_keys}, name keys: {stats.name_keys}, missing text: {stats.missing_text}")
     source_variants = collect_source_variants(text_map, source_audit_keys)
-    source_gaps = collect_empty_sources(text_map, load_language_map(data_paths, "EN"), source_audit_keys)
+    en_map = load_language_map(data_paths, "EN")
+    source_gaps = collect_empty_sources(text_map, en_map, source_audit_keys)
     if only is not None and stats.line_keys == 0:
         raise SystemExit(
             f"no story lines matched --only-chapter {', '.join(sorted(only))}; "
@@ -600,8 +613,9 @@ def extract(
     text_keys = {record["_source_key"] for record in pending}
     # Extras share the speaker index; a chapter filter writes a partial corpus.
     include_extra = include_extra and only is None and limit is None
+    extra_candidates = extra_candidate_keys(text_map) if include_extra else None
     if include_extra:
-        text_keys.update(item.key for item in extra_candidate_keys(text_map) if item.kind == "line")
+        text_keys.update(item.key for item in extra_candidates if item.kind == "line")
     if include_lore:
         text_keys.update(key for key in text_map.keys() if key.startswith(PARTNER_DIALOGUE_PREFIXES + STREET_DIALOGUE_PREFIXES))
     cache_root = _cache_root(data_dir, lang)
@@ -613,16 +627,21 @@ def extract(
         cache_path=cache_root / "speakers_cache.json",
         refresh=refresh_speakers,
         no_speakers=no_speakers,
+        en_map=en_map,
+        json_loader=load_input_json,
     )
+    del en_map
+    input_tables.pop(data_paths.get("FileCfg/OngoingTipsConfigTemplateTb.json"), None)
     stats.speaker_stats = asdict(speaker_stats)
     comic_context = {"links": {}, "errors": {}, "stats": {}}
     if include_supplement and not no_speakers and any(row["family"] == "Comic" for row in supplement):
         perform_path = data_paths.get("FileCfg/PerformTemplateTb.json")
         if perform_path:
             print("Finding comic scene and speaker references...")
-            comic_context = scan_comic_context(game_dir, read_json(perform_path),
+            comic_context = scan_comic_context(game_dir, load_input_json(perform_path),
                                                cache_root / "comic_context_cache.json", refresh=refresh_speakers)
     comic_stats = annotate_supplement_context(supplement, comic_context)
+    input_tables.pop(data_paths.get("FileCfg/PerformTemplateTb.json"), None)
     alias_name_map = {} if accuracy_first else _infer_alias_names(pending, speaker_index, names_by_scene)
 
     records: list[dict] = []
@@ -720,6 +739,7 @@ def extract(
             "text": pending_record["_text"],
             "raw_text": raw_text,
             "text_variants": pending_record["_variants"],
+            "selected_variant": gender if pending_record["_variants"] else None,
             "source_key": source_key,
             "line_type": line_type,
             "scene_speakers": display_speakers,
@@ -760,16 +780,22 @@ def extract(
         stats.gender_pair_filtered += dropped
 
     galgame_scenes: dict[str, list[str]] = {}
+    seen_galgame_scenes: set[tuple[str, str]] = set()
     for record in records:
-        if record["family"] == "GalGame" and record["scene"] not in galgame_scenes.setdefault(record["chapter"], []):
-            galgame_scenes[record["chapter"]].append(record["scene"])
+        if record["family"] == "GalGame":
+            identity = record["chapter"], record["scene"]
+            if identity not in seen_galgame_scenes:
+                seen_galgame_scenes.add(identity)
+                galgame_scenes.setdefault(record["chapter"], []).append(record["scene"])
     scene_positions: dict[tuple[str, str], float] = {}
+    archived_counts: dict[str, int] = {}
     for chapter, scenes in galgame_scenes.items():
+        archived_counts[chapter] = sum(scene in scene_order for scene in scenes)
         for scene, position in _galgame_scene_positions(scenes, scene_order).items():
             scene_positions[(chapter, scene)] = position
     for record in records:
         position = scene_positions.get((record["chapter"], record["scene"]))
-        archived_count = sum(scene in scene_order for scene in galgame_scenes.get(record["chapter"], []))
+        archived_count = archived_counts.get(record["chapter"], 0)
         if record["family"] == "GalGame" and record["archive_order"] is None and position is not None and position < archived_count:
             record["order_source"] = "archive_interpolation"
     annotate_local_order(records)
@@ -875,6 +901,7 @@ def extract(
             keep_raw=keep_raw,
             scene_order=scene_order,
             quest_names=quest_names,
+            candidates=extra_candidates,
         )
         if "jsonl" in formats_set:
             write_jsonl(extra_records, out_dir / "extra.jsonl")
@@ -904,9 +931,11 @@ def extract(
     elif include_lore:
         print("Extracting worldbuilding lore...")
         avatar_path = data_paths.get("FileCfg/AvatarBaseTemplateTb.json")
-        avatar_base = read_json(avatar_path) if avatar_path and avatar_path.exists() else None
+        avatar_base = load_input_json(avatar_path) if avatar_path and avatar_path.exists() else None
         lore_stats = extract_lore(text_map, avatar_base, out_dir, speaker_index=speaker_index,
-                                  accuracy_first=accuracy_first, data_paths=data_paths)
+                                  accuracy_first=accuracy_first, data_paths=data_paths,
+                                  protagonist="M")
+        input_tables.clear()
         print(
             f"  lore extracted: {lore_stats.get('lore_agents', 0)} agents, "
             f"{lore_stats.get('lore_discs', 0)} discs, "
@@ -1007,6 +1036,8 @@ def extract(
         # user's absolute game path must not leak into it.
         "game_dir": game_dir.name if game_dir else "",
         "protagonist": "mixed" if accuracy_first else "M",
+        "selected_protagonist": "M",
+        "lore_schema_version": 1 if include_lore and only is None else None,
         "counts": {
             "line_keys": stats.line_keys,
             "name_keys": stats.name_keys,
@@ -1503,6 +1534,7 @@ def _write_csv(records: list[dict], path: Path) -> None:
         "text",
         "raw_text",
         "text_variants",
+        "selected_variant",
         "timeline",
         "perform",
         "source_key",
