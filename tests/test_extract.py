@@ -45,6 +45,7 @@ def test_extract_fixture(tmp_path, monkeypatch):
         "MainChat_Chapter01_001_01": "聊天内容",
         "Comic_abcdef": "漫画内容",
         "Title_10000002": "「测试场景」",
+        "Intro_10000002": "{F#铃}{M#哲}和苏茜在测试场景见面。",
         "CS_00_01_010": "过场台词一",
         "CS_00_01_020": "过场台词一",
         "CS_00_01_030": "哥哥，可以开始吗？",
@@ -102,6 +103,9 @@ def test_extract_fixture(tmp_path, monkeypatch):
     assert galgame[0]["speaker"] is None
     assert galgame[0]["scene_act"] == 1
     assert galgame[0]["scene_title"] == "测试场景"
+    # 场景梗概（Intro_*）按默认的哲视角渲染；没有梗概的场景为 None。
+    assert galgame[0]["scene_intro"] == "哲和苏茜在测试场景见面。"
+    assert galgame[-1]["scene_intro"] is None
     assert galgame[0]["quest_name"] == "测试任务"
     # The archive places scene 9000001 after 10000002 despite its smaller id.
     assert galgame[-1]["scene"] == "9000001"
@@ -112,6 +116,7 @@ def test_extract_fixture(tmp_path, monkeypatch):
     assert "### 任务：任务二" in story_txt
     assert story_txt.index("你好") < story_txt.index("后来场景台词")
     assert "## 第 1 幕：测试场景（出场：苏茜）" in story_txt
+    assert "> 梗概：哲和苏茜在测试场景见面。" in story_txt
     assert "> 选项 1：选项分支一" in story_txt
     assert "> 选项 2：选项分支二" in story_txt
 

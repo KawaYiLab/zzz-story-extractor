@@ -317,6 +317,8 @@ def render_extra_txt(records: list[dict]) -> str:
             chunks.extend(["", f"#### {title}"])
             if record.get("scene_speakers"):
                 chunks.append(f"（姓名表：{'、'.join(record['scene_speakers'])}；不代表逐句署名）")
+            if record.get("scene_intro"):
+                chunks.append(f"> 梗概：{record['scene_intro']}")
             chunks.append("")
         text = record["text"]
         if record.get("line_type") == "option":

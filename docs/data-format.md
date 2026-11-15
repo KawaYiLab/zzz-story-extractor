@@ -39,6 +39,7 @@
 | `line_id` | 稳定记录 ID，形如 `CH<章节 token>_<类型>_<场景>_<四位行号>`；可含子编号/变体，不随章节排序变化 |
 | `chapter` / `chapter_label` / `chapter_order` | 章节 token、可读标签与排序值 |
 | `scene` / `scene_act` / `scene_title` | 来源场景号、导出幕次与可用标题；幕次属于导出顺序 |
+| `scene_intro` | 场景梗概：游戏给每个场景的一句话提纲（TextMap `Intro_*`，按哲视角渲染），没有时为空（extra 记录省略该字段） |
 | `family` | 内容类型，例如 `GalGame`、`MainChat`、`BubbleStory` |
 | `line_no` / `sub_no` / `variant` | 来源键中的行号、子编号与变体 |
 | `text` | 渲染布局/性别分支、已识别的富文本标记后的文本；保留未知尖括号占位符，注音显示为“正文（注音）” |
