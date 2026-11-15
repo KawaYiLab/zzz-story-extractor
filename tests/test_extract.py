@@ -46,6 +46,7 @@ def test_extract_fixture(tmp_path, monkeypatch):
         "Comic_abcdef": "漫画内容",
         "Title_10000002": "「测试场景」",
         "Intro_10000002": "{F#铃}{M#哲}和苏茜在测试场景见面。",
+        "Intro_9000001": "gal跳过内容",
         "CS_00_01_010": "过场台词一",
         "CS_00_01_020": "过场台词一",
         "CS_00_01_030": "哥哥，可以开始吗？",
@@ -60,6 +61,13 @@ def test_extract_fixture(tmp_path, monkeypatch):
     _write(data / "FileCfg/ArchivePerformTemplateTb.json", {"IAEFFFFLKNB": [
         {"PFOAJKNPCHL": 990101, "JFHCIJHJLOH": 10000002},
         {"PFOAJKNPCHL": 990201, "JFHCIJHJLOH": 9000001},
+    ]})
+    # 梗概只按 Perform 资源文件名里的剧情族和场景号配；策划的占位说明不算梗概。
+    _write(data / "FileCfg/PerformTemplateTb.json", {"IAEFFFFLKNB": [
+        {"PFOAJKNPCHL": 10000002, "BCGIEODKGDG": "Intro_10000002",
+         "BCKKFAEFDPP": "Data/ScriptConfig/Perform/Data/GalGame/Chapter00/Main_GalGame_Chapter00_10000002.asset"},
+        {"PFOAJKNPCHL": 9000001, "BCGIEODKGDG": "Intro_9000001",
+         "BCKKFAEFDPP": "Data/ScriptConfig/Perform/Data/GalGame/Chapter00/Main_GalGame_Chapter00_9000001.asset"},
     ]})
     _write(data / "FileCfg/QuestConfigTemplateTb.json", {"IAEFFFFLKNB": [
         {"ODCODEPMLGG": 9901, "ANCOBODLNIK": "QuestName_9901"},

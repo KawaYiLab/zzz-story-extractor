@@ -232,50 +232,44 @@ def _load_scene_titles(data_paths: dict[str, Path], text_map: TextMap, *,
 
 
 
+# Perform 资源文件名里的剧情族和场景号：Main_GalGame_Chapter240_124000001、Side_GalGame_RAB_100000026。
+# 旧式命名（GalGame_Chapter00_01、C00_01 等）和记录的场景号不是同一套编号，不在这里配。
+_PERFORM_SCENE_RE = re.compile(r"[A-Za-z]+_([A-Za-z]+)_(?:\w+_)?(\d+)\.asset$")
+# 策划写在梗概位置的占位说明（「gal跳过内容」「黑屏跳过战斗」「关卡3-占位」），不是剧情。
+_INTRO_PLACEHOLDER_RE = re.compile(r"跳过|占位|黑屏|刷怪|\bTL\b|gal", re.IGNORECASE)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
 def _load_scene_intros(data_paths: dict[str, Path], text_map: TextMap, *,
-                       json_loader: Callable[[Path], object] | None = None) -> dict[str, str]:
+                       json_loader: Callable[[Path], object] | None = None) -> dict[tuple[str, str], str]:
     """Scene synopses: the one-sentence outline the game shows for each scene (``Intro_*``).
 
-    Keyed like scene titles: the Perform row's id and the scene token in its asset path, then
-    any ``Intro_<scene>`` TextMap key. Gender alternatives render from the default 哲 side.
+    Keyed by ``(family, scene)`` from the Perform row's asset file name, and only matched to a
+    record with exactly that family and scene: a synopsis on the wrong scene is worse than none,
+    so there are no loose fallbacks (``Intro_<scene>`` keys, stripped or padded scene numbers).
+    Gender alternatives render from the default 哲 side; placeholder notes are dropped.
     """
-    intros: dict[str, str] = {}
-
-    def clean(raw: object) -> str:
-        return clean_text(raw, "M").text.strip() if isinstance(raw, str) else ""
-
+    intros: dict[tuple[str, str], str] = {}
     perform_path = data_paths.get("FileCfg/PerformTemplateTb.json")
-    if perform_path and perform_path.exists():
-        try:
-            perf = (json_loader or read_json)(perform_path)
-            rows = perf.get("IAEFFFFLKNB", []) if isinstance(perf, dict) else []
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                intro_key = row.get("BCGIEODKGDG")
-                intro = clean(text_map.get(intro_key)) if intro_key else ""
-                if not intro:
-                    continue
-                asset = row.get("BCKKFAEFDPP", "")
-                m = re.search(r"Chapter\w+/[A-Za-z]+_Chapter\w+_(\w+)\.asset", asset, re.IGNORECASE)
-                if m:
-                    intros[m.group(1)] = intro
-                pid = str(row.get("PFOAJKNPCHL") or "")
-                if pid:
-                    intros[pid] = intro
-        except Exception:
-            pass
-
-    for key, val in text_map.items():
-        if key.startswith("Intro_"):
-            intro = clean(val)
-            if intro:
-                intros.setdefault(key[len("Intro_"):], intro)
+    if not (perform_path and perform_path.exists()):
+        return intros
+    try:
+        perf = (json_loader or read_json)(perform_path)
+    except Exception:
+        return intros
+    rows = perf.get("IAEFFFFLKNB", []) if isinstance(perf, dict) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw = text_map.get(row.get("BCGIEODKGDG") or "")
+        intro = clean_text(raw, "M").text.strip() if isinstance(raw, str) else ""
+        if len(_CJK_RE.findall(intro)) < 4 or _INTRO_PLACEHOLDER_RE.search(intro):
+            continue
+        name = (row.get("BCKKFAEFDPP") or "").rsplit("/", 1)[-1]
+        match = _PERFORM_SCENE_RE.fullmatch(name)
+        if match:
+            intros[(match.group(1), match.group(2))] = intro
     return intros
-
-
-def _scene_lookup(table: dict[str, str], scene: str) -> str | None:
-    return table.get(scene) or table.get(scene.lstrip("0")) or table.get(scene.zfill(4))
 
 
 def _load_archive_order(data_paths: dict[str, Path], text_map: TextMap) -> tuple[dict[str, tuple[int, int]], dict[int, str]]:
@@ -868,7 +862,7 @@ def extract(
             or scene_titles.get(scene.zfill(4))
         )
         record["scene_title"] = title
-        record["scene_intro"] = _scene_lookup(scene_intros, scene)
+        record["scene_intro"] = scene_intros.get((record["family"], scene))
 
     _assign_line_ids(records)
     stats.total_lines = len(records)
@@ -953,7 +947,7 @@ def extract(
         )
         # extra 记录省略空字段，没有梗概的场景不写这一项。
         for record in extra_records:
-            intro = _scene_lookup(scene_intros, record["scene"])
+            intro = scene_intros.get((record["family"], record["scene"]))
             if intro:
                 record["scene_intro"] = intro
         if "jsonl" in formats_set:
