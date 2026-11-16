@@ -103,21 +103,3 @@ def test_quota_errors_stop_instead_of_retrying(monkeypatch):
     monkeypatch.setattr("requests.post", lambda *a, **k: Response())
     with pytest.raises(S.StopGeneration):
         S.http_post("https://example.invalid/v1", "k")({"model": "m"})
-
-
-def test_failed_merge_keeps_chunk_paragraphs():
-    scenes = [S.Scene("GalGame", str(i), f"场景{i}", None, [("诺姆", "字" * 40)], {"诺姆"}) for i in (1, 2)]
-    unit = S.Unit("story", "Chapter240", "测试章", scenes)
-    replies = iter([
-        _reply({"summary": [{"text": "诺姆做了第一件事。", "scenes": ["S1"]}], "scene_synopses": []}),
-        _reply({"summary": [{"text": "诺姆做了第二件事。", "scenes": ["S2"]}], "scene_synopses": []}),
-        {"choices": [{"message": {"content": "两部分有出入，我先说明一下……"}}]},
-        {"choices": [{"message": {"content": "仍然不是 JSON"}}]},
-    ])
-    original = S.CHUNK_CHARS
-    S.CHUNK_CHARS = 60
-    try:
-        raw = S.generate_unit(unit, lambda body: next(replies), "m")
-    finally:
-        S.CHUNK_CHARS = original
-    assert [p["text"] for p in raw["summary"]] == ["诺姆做了第一件事。", "诺姆做了第二件事。"]

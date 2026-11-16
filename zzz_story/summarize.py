@@ -133,10 +133,8 @@ def render(scenes: list[Scene], start: int) -> str:
     return "\n\n".join(parts)
 
 
-def chunks(scenes: list[Scene], limit: int | None = None) -> list[tuple[int, list[Scene]]]:
-    """Consecutive scene runs under ``limit`` (default ``CHUNK_CHARS``) characters, with their
-    first scene number."""
-    limit = CHUNK_CHARS if limit is None else limit
+def chunks(scenes: list[Scene], limit: int = CHUNK_CHARS) -> list[tuple[int, list[Scene]]]:
+    """Consecutive scene runs under ``limit`` characters, with their first scene number."""
     out: list[tuple[int, list[Scene]]] = []
     current: list[Scene] = []
     size = 0
@@ -255,18 +253,10 @@ def generate_unit(unit: Unit, post: Post, model: str) -> dict:
     if len(parts) > 1:
         listing = "\n".join(f"- {p.get('text', '')}（{'、'.join(map(str, p.get('scenes') or []))}）"
                             for p in paragraphs)
-        prompt = MERGE_TEMPLATE.format(
+        merged = ask(post, model, MERGE_TEMPLATE.format(
             label=unit.label, count=len(parts), text=listing,
-            paragraphs=paragraphs_for(sum(s.chars() for s in unit.scenes)))
-        # 合并偶尔不按格式输出（例如先讨论两部分哪里有出入）：重试一次，还不行就保留分块梗概。
-        for _ in range(2):
-            try:
-                merged = [p for p in ask(post, model, prompt).get("summary") or [] if isinstance(p, dict)]
-            except ValueError:
-                continue
-            if merged:
-                paragraphs = merged
-                break
+            paragraphs=paragraphs_for(sum(s.chars() for s in unit.scenes))))
+        paragraphs = [p for p in merged.get("summary") or [] if isinstance(p, dict)]
     return {"summary": paragraphs, "scene_synopses": synopses, "parts": len(parts)}
 
 
