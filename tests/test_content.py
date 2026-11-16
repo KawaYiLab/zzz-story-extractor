@@ -118,6 +118,10 @@ def test_extract_extras_groups_attributes_and_preserves_unproven_repetitions():
 
     text = render_extra_txt(records)
     assert "## 活动剧情" in text and "店员：欢迎光临。" in text and "> 选项：原来是这个意思。" in text
+    # 梗概由 extract() 按场景号补上（没有的不写）；写在场景标题下面。
+    assert all("scene_intro" not in row for row in records)
+    records[0]["scene_intro"] = "店员在店门口迎客。"
+    assert "> 梗概：店员在店门口迎客。" in render_extra_txt(records)
 
 
 def test_accuracy_first_keeps_gender_copies_and_duplicates():

@@ -232,6 +232,46 @@ def _load_scene_titles(data_paths: dict[str, Path], text_map: TextMap, *,
 
 
 
+# Perform 资源文件名里的剧情族和场景号：Main_GalGame_Chapter240_124000001、Side_GalGame_RAB_100000026。
+# 旧式命名（GalGame_Chapter00_01、C00_01 等）和记录的场景号不是同一套编号，不在这里配。
+_PERFORM_SCENE_RE = re.compile(r"[A-Za-z]+_([A-Za-z]+)_(?:\w+_)?(\d+)\.asset$")
+# 策划写在梗概位置的占位说明（「gal跳过内容」「黑屏跳过战斗」「关卡3-占位」），不是剧情。
+_INTRO_PLACEHOLDER_RE = re.compile(r"跳过|占位|黑屏|刷怪|\bTL\b|gal", re.IGNORECASE)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _load_scene_intros(data_paths: dict[str, Path], text_map: TextMap, *,
+                       json_loader: Callable[[Path], object] | None = None) -> dict[tuple[str, str], str]:
+    """Scene synopses: the one-sentence outline the game shows for each scene (``Intro_*``).
+
+    Keyed by ``(family, scene)`` from the Perform row's asset file name, and only matched to a
+    record with exactly that family and scene: a synopsis on the wrong scene is worse than none,
+    so there are no loose fallbacks (``Intro_<scene>`` keys, stripped or padded scene numbers).
+    Gender alternatives render from the default 哲 side; placeholder notes are dropped.
+    """
+    intros: dict[tuple[str, str], str] = {}
+    perform_path = data_paths.get("FileCfg/PerformTemplateTb.json")
+    if not (perform_path and perform_path.exists()):
+        return intros
+    try:
+        perf = (json_loader or read_json)(perform_path)
+    except Exception:
+        return intros
+    rows = perf.get("IAEFFFFLKNB", []) if isinstance(perf, dict) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw = text_map.get(row.get("BCGIEODKGDG") or "")
+        intro = clean_text(raw, "M").text.strip() if isinstance(raw, str) else ""
+        if len(_CJK_RE.findall(intro)) < 4 or _INTRO_PLACEHOLDER_RE.search(intro):
+            continue
+        name = (row.get("BCKKFAEFDPP") or "").rsplit("/", 1)[-1]
+        match = _PERFORM_SCENE_RE.fullmatch(name)
+        if match:
+            intros[(match.group(1), match.group(2))] = intro
+    return intros
+
+
 def _load_archive_order(data_paths: dict[str, Path], text_map: TextMap) -> tuple[dict[str, tuple[int, int]], dict[int, str]]:
     """Archive table order, with validated legacy quest-id associations.
 
@@ -446,6 +486,7 @@ def extract(
     costumes = costume_prefixes(text_map)
     print(f"  protagonist forms: {len(costumes)} ({', '.join(sorted(costumes))})")
     scene_titles = _load_scene_titles(data_paths, text_map, json_loader=load_input_json)
+    scene_intros = _load_scene_intros(data_paths, text_map, json_loader=load_input_json)
     if no_speakers:
         input_tables.clear()
     scene_order, quest_names = _load_archive_order(data_paths, text_map)
@@ -821,6 +862,7 @@ def extract(
             or scene_titles.get(scene.zfill(4))
         )
         record["scene_title"] = title
+        record["scene_intro"] = scene_intros.get((record["family"], scene))
 
     _assign_line_ids(records)
     stats.total_lines = len(records)
@@ -903,6 +945,11 @@ def extract(
             quest_names=quest_names,
             candidates=extra_candidates,
         )
+        # extra 记录省略空字段，没有梗概的场景不写这一项。
+        for record in extra_records:
+            intro = scene_intros.get((record["family"], record["scene"]))
+            if intro:
+                record["scene_intro"] = intro
         if "jsonl" in formats_set:
             write_jsonl(extra_records, out_dir / "extra.jsonl")
         if "txt" in formats_set:
@@ -1512,6 +1559,7 @@ def _write_csv(records: list[dict], path: Path) -> None:
         "scene",
         "scene_act",
         "scene_title",
+        "scene_intro",
         "quest_name",
         "family",
         "line_no",
@@ -1556,6 +1604,7 @@ def _write_csv(records: list[dict], path: Path) -> None:
         for record in records:
             row = dict(record)
             row["scene_title"] = row.get("scene_title") or ""
+            row["scene_intro"] = row.get("scene_intro") or ""
             row["quest_name"] = row.get("quest_name") or ""
             row["text_variants"] = json.dumps(row["text_variants"], ensure_ascii=False) if row["text_variants"] else ""
             row["timeline"] = json.dumps(row["timeline"], ensure_ascii=False) if row.get("timeline") else ""

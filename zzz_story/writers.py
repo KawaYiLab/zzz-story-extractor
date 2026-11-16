@@ -165,6 +165,9 @@ def write_story_txt(records: list[dict], path: Path, include_index: bool = True)
             chunks.append("")
             chunks.append(f"## 第 {act_num} 幕{title_str}{cast_str}")
             chunks.append("")
+            if record.get("scene_intro"):
+                chunks.append(f"> 梗概：{record['scene_intro']}")
+                chunks.append("")
             if unlinked_names:
                 chunks.append("> 说话人未关联；分支、播放及先后未核实。当前排列不代表连续播放，重复及不同版本原文保留。")
                 chunks.append("")

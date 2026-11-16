@@ -45,6 +45,8 @@ def test_extract_fixture(tmp_path, monkeypatch):
         "MainChat_Chapter01_001_01": "聊天内容",
         "Comic_abcdef": "漫画内容",
         "Title_10000002": "「测试场景」",
+        "Intro_10000002": "{F#铃}{M#哲}和苏茜在测试场景见面。",
+        "Intro_9000001": "gal跳过内容",
         "CS_00_01_010": "过场台词一",
         "CS_00_01_020": "过场台词一",
         "CS_00_01_030": "哥哥，可以开始吗？",
@@ -59,6 +61,13 @@ def test_extract_fixture(tmp_path, monkeypatch):
     _write(data / "FileCfg/ArchivePerformTemplateTb.json", {"IAEFFFFLKNB": [
         {"PFOAJKNPCHL": 990101, "JFHCIJHJLOH": 10000002},
         {"PFOAJKNPCHL": 990201, "JFHCIJHJLOH": 9000001},
+    ]})
+    # 梗概只按 Perform 资源文件名里的剧情族和场景号配；策划的占位说明不算梗概。
+    _write(data / "FileCfg/PerformTemplateTb.json", {"IAEFFFFLKNB": [
+        {"PFOAJKNPCHL": 10000002, "BCGIEODKGDG": "Intro_10000002",
+         "BCKKFAEFDPP": "Data/ScriptConfig/Perform/Data/GalGame/Chapter00/Main_GalGame_Chapter00_10000002.asset"},
+        {"PFOAJKNPCHL": 9000001, "BCGIEODKGDG": "Intro_9000001",
+         "BCKKFAEFDPP": "Data/ScriptConfig/Perform/Data/GalGame/Chapter00/Main_GalGame_Chapter00_9000001.asset"},
     ]})
     _write(data / "FileCfg/QuestConfigTemplateTb.json", {"IAEFFFFLKNB": [
         {"ODCODEPMLGG": 9901, "ANCOBODLNIK": "QuestName_9901"},
@@ -102,6 +111,9 @@ def test_extract_fixture(tmp_path, monkeypatch):
     assert galgame[0]["speaker"] is None
     assert galgame[0]["scene_act"] == 1
     assert galgame[0]["scene_title"] == "测试场景"
+    # 场景梗概（Intro_*）按默认的哲视角渲染；没有梗概的场景为 None。
+    assert galgame[0]["scene_intro"] == "哲和苏茜在测试场景见面。"
+    assert galgame[-1]["scene_intro"] is None
     assert galgame[0]["quest_name"] == "测试任务"
     # The archive places scene 9000001 after 10000002 despite its smaller id.
     assert galgame[-1]["scene"] == "9000001"
@@ -112,6 +124,7 @@ def test_extract_fixture(tmp_path, monkeypatch):
     assert "### 任务：任务二" in story_txt
     assert story_txt.index("你好") < story_txt.index("后来场景台词")
     assert "## 第 1 幕：测试场景（出场：苏茜）" in story_txt
+    assert "> 梗概：哲和苏茜在测试场景见面。" in story_txt
     assert "> 选项 1：选项分支一" in story_txt
     assert "> 选项 2：选项分支二" in story_txt
 
