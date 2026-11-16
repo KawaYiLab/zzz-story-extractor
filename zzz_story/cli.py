@@ -118,6 +118,20 @@ def _build_parser() -> argparse.ArgumentParser:
     upload_parser.add_argument("--save", type=Path, default=None, help="also write the bundle (.json.gz) to this path")
     upload_parser.add_argument("--timeout", type=float, default=300.0, help="HTTP timeout in seconds")
 
+    summarize = sub.add_parser(
+        "summarize",
+        help="write AI-generated plot summaries (summaries.jsonl) for an extraction output",
+        description="用 OpenAI 兼容的对话模型给每章、每组活动支线写剧情梗概，并给没有游戏梗概的场景补一句；"
+                    "结果是 AI 整理的派生文本，写入 summaries.jsonl，upload 时一并上传。按单元缓存，可中断续跑。"
+                    "密钥从环境变量 ZZZ_LLM_API_KEY 读。",
+    )
+    summarize.add_argument("--out", type=Path, default=Path("out"), help="extraction output directory")
+    summarize.add_argument("--base-url", default=os.environ.get("ZZZ_LLM_BASE_URL"),
+                           help="OpenAI-compatible API base, e.g. https://api.example.com/v1 (env ZZZ_LLM_BASE_URL)")
+    summarize.add_argument("--model", default=os.environ.get("ZZZ_LLM_MODEL"), help="model name (env ZZZ_LLM_MODEL)")
+    summarize.add_argument("--only", default="", help="comma-separated chapter / group tokens, e.g. Chapter240,side.RAB")
+    summarize.add_argument("--limit", type=int, default=None, help="generate at most this many new units")
+
     coverage = sub.add_parser(
         "coverage",
         help="report which TextMap dialogue families the content registry covers",
@@ -179,6 +193,27 @@ def _doctor(args: argparse.Namespace) -> int:
         print(f"  perform resources: FAILED ({exc})")
 
     return 0 if ok else 2
+
+
+def _summarize(args: argparse.Namespace, out: Path) -> int:
+    from .summarize import http_post, run
+
+    key = os.environ.get("ZZZ_LLM_API_KEY")
+    if not (args.base_url and args.model and key):
+        print("error: 需要 --base-url、--model 和环境变量 ZZZ_LLM_API_KEY", file=sys.stderr)
+        return 2
+    if not (out / "story.jsonl").is_file():
+        print(f"error: {out} 里没有 story.jsonl，先运行 extract", file=sys.stderr)
+        return 2
+    only = {token.strip() for token in args.only.split(",") if token.strip()} or None
+    print(f"整理剧情梗概：{out}（模型 {args.model}）")
+    stats = run(out, http_post(args.base_url, key), args.model, only=only, limit=args.limit)
+    print(f"  单元 {stats['units']}：新生成 {stats['generated']}，沿用缓存 {stats['cached']}，"
+          f"校验丢弃 {stats['dropped']} 条")
+    if stats["stopped"]:
+        print(f"  已停止（{stats['stopped']}）；补足额度后重跑会从没做完的单元继续", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _upload(args: argparse.Namespace, out: Path) -> int:
@@ -297,6 +332,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "upload":
         return _upload(args, out)
+
+    if args.command == "summarize":
+        return _summarize(args, out)
 
     if args.command == "extract-lore":
         try:
