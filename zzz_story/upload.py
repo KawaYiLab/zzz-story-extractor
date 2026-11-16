@@ -60,10 +60,6 @@ def build_bundle(out_dir: Path) -> dict[str, Any]:
     extra = out_dir / "extra.jsonl"
     if extra.is_file():
         bundle["extra"] = extra.read_text(encoding="utf-8")
-    # AI 整理的剧情梗概（summarize 子命令）：旧服务器忽略这个字段。
-    summaries = out_dir / "summaries.jsonl"
-    if summaries.is_file():
-        bundle["summaries"] = summaries.read_text(encoding="utf-8")
     _normalize_chapter_orders(bundle)
     lore_dir = out_dir / "lore"
     if lore_dir.is_dir():
