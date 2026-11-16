@@ -121,28 +121,3 @@ def test_failed_merge_keeps_chunk_paragraphs():
     finally:
         S.CHUNK_CHARS = original
     assert [p["text"] for p in raw["summary"]] == ["诺姆做了第一件事。", "诺姆做了第二件事。"]
-
-
-def test_parallel_run_generates_every_unit(tmp_path):
-    _write_output(tmp_path)
-    stats = S.run(tmp_path, lambda body: _reply({"summary": [], "scene_synopses": []}), "m",
-                  jobs=4, log=lambda _: None)
-    assert stats["generated"] == 2 and stats["stopped"] is None
-
-
-def test_rate_limits_back_off_then_succeed(monkeypatch):
-    class Response:
-        def __init__(self, code):
-            self.status_code = code
-            self.text = ""
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"ok": True}
-
-    codes = iter([429, 429, 200])
-    monkeypatch.setattr("requests.post", lambda *a, **k: Response(next(codes)))
-    monkeypatch.setattr(S.time, "sleep", lambda _: None)
-    assert S.http_post("https://example.invalid/v1", "k")({"model": "m"}) == {"ok": True}

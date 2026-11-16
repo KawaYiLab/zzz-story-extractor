@@ -131,7 +131,6 @@ def _build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--model", default=os.environ.get("ZZZ_LLM_MODEL"), help="model name (env ZZZ_LLM_MODEL)")
     summarize.add_argument("--only", default="", help="comma-separated chapter / group tokens, e.g. Chapter240,side.RAB")
     summarize.add_argument("--limit", type=int, default=None, help="generate at most this many new units")
-    summarize.add_argument("--jobs", type=int, default=1, help="units generated in parallel (default 1)")
 
     coverage = sub.add_parser(
         "coverage",
@@ -208,7 +207,7 @@ def _summarize(args: argparse.Namespace, out: Path) -> int:
         return 2
     only = {token.strip() for token in args.only.split(",") if token.strip()} or None
     print(f"整理剧情梗概：{out}（模型 {args.model}）")
-    stats = run(out, http_post(args.base_url, key), args.model, only=only, limit=args.limit, jobs=args.jobs)
+    stats = run(out, http_post(args.base_url, key), args.model, only=only, limit=args.limit)
     print(f"  单元 {stats['units']}：新生成 {stats['generated']}，沿用缓存 {stats['cached']}，"
           f"校验丢弃 {stats['dropped']} 条")
     if stats["stopped"]:

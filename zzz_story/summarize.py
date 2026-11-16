@@ -178,24 +178,18 @@ def http_post(base_url: str, api_key: str, timeout: float = 600.0) -> Post:
     url = base_url.rstrip("/") + "/chat/completions"
 
     def post(body: dict) -> dict:
-        attempts = 6
-        for attempt in range(attempts):
-            last = attempt == attempts - 1
+        for attempt in range(3):
             try:
                 response = requests.post(url, json=body, timeout=timeout,
                                          headers={"Authorization": f"Bearer {api_key}"})
             except requests.RequestException:
-                if last:
+                if attempt == 2:
                     raise
                 time.sleep(5 * (attempt + 1))
                 continue
-            # 限流：退避重试，多次仍限流才停。鉴权失败、余额不足直接停。
-            if response.status_code == 429 and not last:
-                time.sleep(15 * (attempt + 1))
-                continue
             if response.status_code in (401, 402, 403, 429):
                 raise StopGeneration(f"{response.status_code} {response.text[:300]}")
-            if response.status_code >= 500 and not last:
+            if response.status_code >= 500 and attempt < 2:
                 time.sleep(5 * (attempt + 1))
                 continue
             response.raise_for_status()
@@ -319,63 +313,34 @@ def unit_hash(unit: Unit, model: str) -> str:
 
 
 def run(out_dir: Path, post: Post, model: str, *, only: set[str] | None = None,
-        limit: int | None = None, jobs: int = 1, log: Callable[[str], None] = print) -> dict:
-    """Generate every unit not yet cached, then write ``summaries.jsonl``. Returns run stats.
-
-    ``jobs`` units are generated at once. After a quota/auth stop no new unit is started;
-    units already running finish and are cached.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-    import threading
-
+        limit: int | None = None, log: Callable[[str], None] = print) -> dict:
+    """Generate every unit not yet cached, then write ``summaries.jsonl``. Returns run stats."""
     units = load_units(out_dir, only)
     cache_dir = out_dir / "summaries-cache"
     cache_dir.mkdir(exist_ok=True)
     stats = {"units": len(units), "generated": 0, "cached": 0, "stopped": None, "dropped": 0}
-    pending = []
+    done = 0
     for unit in units:
         cached = cache_dir / f"{unit_hash(unit, model)}.json"
         if cached.is_file():
             stats["cached"] += 1
-        elif limit is None or len(pending) < limit:
-            pending.append((unit, cached))
-    lock = threading.Lock()
-    stop = threading.Event()
-
-    def work(item) -> None:
-        unit, cached = item
-        if stop.is_set():
-            return
+            continue
+        if limit is not None and done >= limit:
+            continue
         try:
             raw = generate_unit(unit, post, model)
-        except StopGeneration as exc:
-            with lock:
-                if not stop.is_set():
-                    stats["stopped"] = str(exc)
-                    log(f"  停止：{exc}")
-                stop.set()
-            return
+        except StopGeneration as stop:
+            stats["stopped"] = str(stop)
+            log(f"  停止：{stop}")
+            break
         except (ValueError, KeyError) as exc:
             log(f"  {unit.chapter}：生成失败，跳过（{exc}）")
-            return
-        except Exception as exc:  # 网络等偶发错误：跳过这个单元，下次续跑再补。
-            log(f"  {unit.chapter}：请求失败，跳过（{type(exc).__name__}: {str(exc)[:200]}）")
-            return
+            continue
         raw["generated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         cached.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
-        with lock:
-            stats["generated"] += 1
-            log(f"  {unit.chapter}（{unit.label}）：{len(raw['summary'])} 段，"
-                f"{len(raw['scene_synopses'])} 个场景梗概 [{stats['generated']}/{len(pending)}]")
-
-    if jobs <= 1:
-        for item in pending:
-            work(item)
-            if stop.is_set():
-                break
-    else:
-        with ThreadPoolExecutor(max_workers=jobs) as pool:
-            list(pool.map(work, pending))
+        done += 1
+        stats["generated"] += 1
+        log(f"  {unit.chapter}（{unit.label}）：{len(raw['summary'])} 段，{len(raw['scene_synopses'])} 个场景梗概")
     stats["dropped"] = write_summaries(out_dir, model)["dropped"]
     return stats
 
