@@ -89,7 +89,7 @@ def test_conflicting_agent_tags_do_not_assign_an_arbitrary_dossier(tmp_path):
     assert key in (tmp_path / "13_未关联代理人互动.md").read_text(encoding="utf-8")
 
 
-def test_gender_route_filter_uses_peers_within_the_same_source_stream(tmp_path):
+def test_both_gender_routes_keep_their_source_stream(tmp_path):
     male = "PartnerTalk_Chat_PartnerAnbi_1001_01"
     female = "PartnerTalk_Chat_PartnerAnbi_1001_02_F"
     unrelated = "PartnerTalk_Bubble_PartnerAnbi_1001_01"
@@ -99,14 +99,11 @@ def test_gender_route_filter_uses_peers_within_the_same_source_stream(tmp_path):
         female: SpeakerInfo("安比", None, .98, "perform", perform={"paired_key": male, "sides": ["F"], "explicit_gender": True}),
     }
     index = SpeakerIndex(infos, SpeakerStats())
-    for accuracy in (False, True):
-        output = tmp_path / str(accuracy)
-        _extract_agents(TextMap(values, "CHS"), [_avatar(1011)], output,
-                        speaker_index=index, accuracy_first=accuracy)
-        rows = {row["source_key"]: row for row in _rows(output / "dialogue-audit.jsonl")}
-        assert rows[male]["retained"] and rows[unrelated]["retained"]
-        assert rows[female]["retained"] == accuracy
-        assert rows[female]["raw_text"] == values[female]
+    _extract_agents(TextMap(values, "CHS"), [_avatar(1011)], tmp_path, speaker_index=index)
+    rows = {row["source_key"]: row for row in _rows(tmp_path / "dialogue-audit.jsonl")}
+    assert set(rows) == {male, female, unrelated}
+    assert all(row["retained"] and row["raw_text"] == values[key] for key, row in rows.items())
+    assert rows[female]["perform"]["paired_key"] == male
 
 
 def test_sms_gender_substitution_does_not_identify_sender(tmp_path):

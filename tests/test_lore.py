@@ -19,19 +19,18 @@ def test_lore_dialogue_names_event_boundaries_routes_and_source_audit(tmp_path):
     index = SpeakerIndex(infos, SpeakerStats())
     avatar = {"IAEFFFFLKNB": [{"PFOAJKNPCHL": 1011, "HAKHHHCAENA": "Avatar_Anby",
                               "FEKFJBFGANO": "anbi", "OOOHMBMDLBI": 1}]}
-    for accuracy in (False, True):
-        output = tmp_path / str(accuracy)
-        stats = extract_lore(TextMap(values, "CHS"), avatar, output, speaker_index=index, accuracy_first=accuracy)
-        doc = (output / "lore/agents/01_狡兔屋.md").read_text(encoding="utf-8")
-        rows = [json.loads(line) for line in (output / "lore/agents/dialogue-audit.jsonl").read_text(encoding="utf-8").splitlines()]
-        assert "角色姓名不是台词" not in doc
-        assert "街区日常 2_4" in doc and "街区日常 2_5" in doc
-        assert "街区日常 1205290704_Chat010" in doc
-        assert male in doc and (female in doc) == accuracy
-        assert {row["source_key"] for row in rows} == set(values) - {"Avatar_Anby", prefix + "_Name_001"}
-        removed = [row for row in rows if not row["retained"]]
-        assert len(removed) == stats["lore_dialogue_removed"] == (0 if accuracy else 1)
-        assert all(row["raw_text"] == values[row["source_key"]] for row in rows)
+    output = tmp_path
+    stats = extract_lore(TextMap(values, "CHS"), avatar, output, speaker_index=index)
+    doc = (output / "lore/agents/01_狡兔屋.md").read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in (output / "lore/agents/dialogue-audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert "角色姓名不是台词" not in doc
+    assert "街区日常 2_4" in doc and "街区日常 2_5" in doc
+    assert "街区日常 1205290704_Chat010" in doc
+    assert male in doc and female in doc
+    assert {row["source_key"] for row in rows} == set(values) - {"Avatar_Anby", prefix + "_Name_001"}
+    removed = [row for row in rows if not row["retained"]]
+    assert len(removed) == stats["lore_dialogue_removed"] == 0
+    assert all(row["raw_text"] == values[row["source_key"]] for row in rows)
 
 
 def test_extract_lore(tmp_path):

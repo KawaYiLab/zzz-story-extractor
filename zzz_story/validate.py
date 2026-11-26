@@ -50,9 +50,17 @@ def validate_records(records: list[dict], supplements: list[dict] | None = None,
         return issues
 
     all_rows = records + (supplements or []) + (extras or [])
-    keys = Counter(row["source_key"] for row in all_rows if row.get("source_key"))
-    if any(count > 1 for count in keys.values()):
-        issues.append(Issue("error", "duplicate-source-key", "正文存在重复来源键"))
+    keys = {}
+    for row in all_rows:
+        if key := row.get("source_key"):
+            keys.setdefault(key, []).append(row)
+    for key, rows in keys.items():
+        if len(rows) == 1:
+            continue
+        if (len(rows) == 2 and {row.get("selected_variant") for row in rows} == {"M", "F"}
+                and len({(row.get("text"), row.get("speaker")) for row in rows}) == 2):
+            continue
+        issues.append(Issue("error", "duplicate-source-key", f"正文存在重复来源键：{key}"))
     empty = [row for row in all_rows if "text" in row and (not isinstance(row["text"], str) or not row["text"].strip())]
     if empty:
         issues.append(Issue("error", "empty-text", f"{len(empty)} 条记录正文为空或不是字符串"))

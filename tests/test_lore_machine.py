@@ -66,7 +66,7 @@ def make_fixture(output, protagonist="M", values=None):
 @pytest.mark.parametrize("protagonist", ["M", "F"])
 def test_machine_lore_preserves_every_domain_source_and_audit_reference(tmp_path, protagonist):
     root, stats, header, docs = make_fixture(tmp_path, protagonist)
-    assert header["protagonist"] == protagonist
+    assert header["schema_version"] == 1
     assert set(header["covered_source_files"]) == {p.relative_to(root).as_posix() for p in root.rglob("*.md")}
     assert {d["category"] for d in docs} == {"agents", "equipment", "interknot", "cinema", "glossary", "street"}
     assert all(d["items"] for d in docs)

@@ -1,206 +1,25 @@
-# 绝区零剧情文本提取器
+# 绝区零剧情语料提取器
 
-从公开 [ZenlessData](https://git.mero.moe/dimbreath/ZenlessData) 和本机《绝区零》资源中提取主线文本及活动、支线、代理人故事等主线外剧情，解析逐句说话人，导出可读剧本与带来源证据的 JSONL。也支持设定资料导出、语料校验、版本对比和 [绳网后端](https://github.com/KawaYiLab/ikserver-rs) 上传。
+为绳网剧情档案库 MCP 生成简体中文语料。
 
-当前工具版本为 **0.3.0**，已验证游戏数据版本为 **3.3.0（CHS）**。输出按章节、内容类型和场景整理；**跨场景播放顺序尚未还原**，不能直接将目录顺序当作剧情时间线。
+在 Windows 上安装 Python 3.11 或更高版本，双击仓库根目录的 **一键提取.cmd**。首次运行会准备 Python 环境并下载文本和配置。工具会自动查找本机游戏资源，用来识别说话人和场景。
 
-## 剧情库 MCP
-
-绳网剧情库 MCP 地址：[https://ik.tiwat.cn/v1/story/mcp](https://ik.tiwat.cn/v1/story/mcp)。支持 Streamable HTTP，可在兼容的 MCP 客户端中配置：
-
-```json
-{
-  "mcpServers": {
-    "InterKnotStory": {
-      "type": "streamable-http",
-      "url": "https://ik.tiwat.cn/v1/story/mcp"
-    }
-  }
-}
-```
-
-仓库已提供相同的 [MCP 配置](.mcp.json)。
-
-## 快速开始
-
-需要 Windows 和 Python 3.11+（本仓库使用 Python 3.12 验证）。解析演出资源与配音说话人还需要本机安装游戏；仅提取文本可使用 `--no-speakers`。
-
-在 PowerShell 中运行：
-
-```powershell
-git clone https://github.com/KawaYiLab/zzz-story-extractor.git
-cd zzz-story-extractor
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .
-.\.venv\Scripts\python.exe -m zzz_story doctor
-.\.venv\Scripts\python.exe -m zzz_story extract --out out
-```
-
-首次运行会下载 TextMap 与配置表，缓存到 `data/cache/3.3.0/`；`doctor` 检查依赖、数据来源、游戏目录和资源索引。已有仓库也可运行 `scripts/setup.ps1` 创建环境、安装依赖并执行诊断。
-
-默认结果写入 `out/zzz_story_3.3.0_chs/`，可从 `story.txt` 或 `chapters/` 开始阅读。安装后也可用 `.\.venv\Scripts\zzz-story.exe` 代替 `python.exe -m zzz_story`。
-
-**每次提取请使用新的输出目录。** 如果目标目录已含正文、设定或清单等产物，工具会在写入前报错；再次提取时换一个 `--out`，例如 `out\run2`。
-
-## 使用
-
-```powershell
-# 只提取文本，跳过演出说话人解析与设定导出
-.\.venv\Scripts\python.exe -m zzz_story extract --no-speakers --no-lore --out out\textonly
-
-# 只提取指定章节（也支持 --only-chapter 210,220；自动跳过设定导出）
-.\.venv\Scripts\python.exe -m zzz_story extract --only-chapter 240 --out out\ch240
-
-# 同时生成 JSONL、TXT 和 CSV（UTF-8 BOM，方便 Excel 打开）
-.\.venv\Scripts\python.exe -m zzz_story extract --format jsonl,txt,csv --out out\csv
-
-# 完整性模式：保留双方路线、重复候选及原文，供对账核查
-.\.venv\Scripts\python.exe -m zzz_story extract --accuracy-first --out out\audit
-
-# 只导出设定资料
-.\.venv\Scripts\python.exe -m zzz_story extract-lore --out out\lore-only
-
-# 设定正文选择女主内嵌变体，原始双方变体仍保留
-.\.venv\Scripts\python.exe -m zzz_story extract-lore --protagonist F --out out\lore-belle
-```
-
-常用参数（`extract`）：
-
-| 参数 | 用途 |
-| --- | --- |
-| `--out PATH` | 输出目录；仅默认值 `out` 会展开为版本子目录，其他路径直接使用 |
-| `--data-dir PATH` | 使用本地 ZenlessData，跳过下载 |
-| `--game-dir PATH` | 指定 `ZenlessZoneZero Game` 目录，含空格时用引号包裹 |
-| `--lang CHS` | TextMap 语言，默认为简体中文；说话人别名映射以中英文数据为基础 |
-| `--only-chapter TOKEN` | 按章节 token 筛选，如 `240` 或 `210,220` |
-| `--limit N` | 仅处理前 N 个台词键，用于调试 |
-| `--format jsonl,txt,csv` | 输出格式，默认为 `jsonl,txt`；后续校验与上传需要 JSONL |
-| `--no-speakers` / `--no-lore` / `--no-supplement` / `--no-extra` | 分别跳过演出说话人解析、设定导出、Comic/CS 补充文本、主线外剧情 |
-| `--accuracy-first` | 关闭分支与重复候选删减、场景名单推断，并保留原文 |
-| `--no-dedupe` | 关闭重复行合并；完整候选核查请使用 `--accuracy-first` |
-| `--keep-raw` | 即使清洗前后相同，也写入 `raw_text` |
-| `--refresh` / `--refresh-speakers` | 分别重新下载数据、强制重建说话人缓存；仍需新的输出目录 |
-| `--require-speakers 0.95` | 最终保留行的配音说话人覆盖率低于阈值时返回退出码 3 |
-| `--allow-issues` | 结构校验发现错误时允许命令成功结束，问题仍写入报告 |
-
-查看完整帮助：
-
-```powershell
-.\.venv\Scripts\python.exe -m zzz_story --help
-.\.venv\Scripts\python.exe -m zzz_story extract --help
-```
-
-## 输出文件
-
-| 文件或目录 | 内容 |
-| --- | --- |
-| `story.jsonl` | 一行一条主线记录，包含文本、说话人、稳定 ID 和来源证据 |
-| `story.txt` / `chapters/` | 按章节与场景组织的可读剧本、分章文本 |
-| `story.csv` | 可选 CSV，包含逐行字段与 JSON 编码的证据 |
-| `supplement.jsonl` / `supplement.txt` | Comic/CS 补充文本，有候选且启用对应格式时生成 |
-| `extra.jsonl` / `extra.txt` | 活动剧情、支线委托、代理人故事、空洞事件等主线外剧情 |
-| `extra-discarded.jsonl` | 主线外剧情的显式女主分支、已验证副本及来源证据 |
-| `content-coverage.json` | 各内容域键数、字数及未登记的对白类键族 |
-| `manifest.json` / `coverage.json` | 输入哈希、版本、章节、计数、覆盖率及校验结果 |
-| `discarded.jsonl` | 删减候选的原文、来源键、原因与配对证据；完整性模式为空 |
-| `speaker-gaps.jsonl` / `placeholder-records.jsonl` | 未解决的说话人记录、已复核的剧情占位说明 |
-| `source-variants.jsonl` / `source-gaps.jsonl` | 辅助来源原文、空主线来源与英文原文存在情况 |
-| `supplement-context-report.json` | 漫画资源关联统计与缺失资源 |
-| `name_candidates.jsonl` | 完整性模式的姓名候选，用于核验姓名条目删减 |
-| `lore/` | 代理人、装备、绳网、影院等设定 Markdown，以及代理人、街头、短信和附件来源审计 |
-| `lore/documents.jsonl` | 有来源字段及审计引用的机器目录，供新 MCP 服务直接读取；Markdown 的导语、预览和显示兜底不作为原文 |
-| `content-audit.md` / `content-audit.json` | 单独运行内容审计后生成的质量报告 |
-
-字段、排序、覆盖率和删减审计的详细约定见 [数据格式说明](docs/data-format.md)。计数随输入、筛选范围和解析版本变化，请以本次输出的清单为准。
-
-## 校验与版本对比
-
-`extract` 自动校验记录结构，将结果写入 `manifest.json` 和 `coverage.json` 的 `validation`。结构错误或覆盖率未达标时返回退出码 3；命令失败后仍应检查已写出的报告。
-
-```powershell
-# 对已完成的输出重新执行结构校验（存在错误时返回退出码 1）
-.\.venv\Scripts\python.exe -m zzz_story verify --out out\zzz_story_3.3.0_chs
-
-# 将同一份输入、同一筛选范围的默认输出与完整性输出对账
-.\.venv\Scripts\python.exe scripts\check_corpus_integrity.py --output out\zzz_story_3.3.0_chs --audit out\audit
-
-# 检查主线、补充和主线外的同文、重复段落、残留标记及导出一致性
-.\.venv\Scripts\python.exe -m zzz_story.content_audit --output out\zzz_story_3.3.0_chs
-
-# 统计 TextMap 各内容域并列出未登记的对白类键族（只需下载数据）
-.\.venv\Scripts\python.exe -m zzz_story coverage
-
-# 按稳定 line_id 比较两个版本；--examples 0 只显示计数
-.\.venv\Scripts\python.exe -m zzz_story diff --old out\zzz_story_3.2.0_chs --new out\zzz_story_3.3.0_chs
-```
-
-内容审计可加 `--baseline PATH` 比较旧结果，加 `--cache PATH` 读取 `speakers_cache.json` 中的演出资源清单，检查已解析资源的引用缺口。结构校验与原文对账不能证明候选在游戏中的实际播放关系。
+提取完成后，供档案库导入的文件是 **out/story-corpus.json.gz**。包内含主线、活动、支线、代理人故事、漫画、过场字幕和设定资料。哲与铃的剧情收在同一包中。再次双击即可更新，成功后才会替换旧包。
 
 ## 上传到绳网后端
 
-`upload` 将主线、补充、`extra.jsonl`、清单及 `lore/` 下的 Markdown 和结构化 JSONL 打成 gzip 语料包，上传到 [ikserver-rs](https://github.com/KawaYiLab/ikserver-rs)，供剧情库 MCP（`/v1/story/mcp`）检索。包格式保持为 1。支持机器目录的服务端优先读取 `lore/documents.jsonl` 的来源字段和审计引用，跳过其覆盖的展示 Markdown；没有机器目录的旧包继续按旧方式导入。完整原文、变体及漫画资源证据按需展开。首次使用机器目录需更新后端并在新输出目录重新提取。需要后端管理员账号或令牌：
+已有语料包时，直接双击 **一键上传.cmd**。按提示输入绳网管理员的邮箱或用户名和密码，工具会把现有包发到 `https://ik.tiwat.cn`。看到「语料已生效」和语料版本 ID 即表示发布成功。
+
+也可以在仓库根目录用 PowerShell 运行同一条上传命令。
 
 ```powershell
-.\.venv\Scripts\python.exe -m zzz_story upload --out out\zzz_story_3.3.0_chs --server https://your-server.example --account admin@example.com
+.\.venv\Scripts\python.exe -m zzz_story upload
 ```
 
-密码默认交互输入，也可从 `IK_PASSWORD` 读取。服务器、账号和令牌分别支持 `IK_SERVER`、`IK_ACCOUNT`、`IK_TOKEN` 环境变量；`--token` 可代替账号密码。
+原有的 `IK_ACCOUNT`、`IK_PASSWORD` 和 `IK_TOKEN` 环境变量仍可用。设置了管理员令牌 `IK_TOKEN` 就会直接上传。自建后端可用 `IK_SERVER` 指定地址。
 
-`--save bundle.json.gz` 可同时保存语料包；未指定服务器且未设置 `IK_SERVER` 时，只保存到本地。可读 TXT、分章文本和审计附件不上传。旧输出的小数章节顺序会在打包时统一迁移为整数。
+## 许可与来源
 
-## 范围与已知限制
+代码采用 [MIT 许可](LICENSE)。游戏文本版权归米哈游所有，请勿公开分发提取的语料。
 
-- 主线正文覆盖 `Main_GalGame`、`Main_Chat`、`Main_BubbleStory`、`Main_Bubble`、`Main_Ongoing*`、`Main_ChatAudio`、`Main_ChatPlus`、`MainChat_Chapter*`，以及第一季过场演出的旧式键 `GalGame_Chapter<数字>_*`。
-- 活动、支线、代理人故事、空洞事件写入 `extra.jsonl`（见[数据格式说明](docs/data-format.md#活动支线与代理人故事)），按来源表分组，活动与支线按游戏内标题推断中文名（查不到时保留内部标签），没有任务或播放顺序关联；未接入游戏资源时大多没有逐句说话人。设定及代理人互动单独写入 `lore/`。
-- 键族归属由 `zzz_story/content.py` 统一登记；`content-coverage.json` 和 `coverage` 命令列出未登记的对白类键族，版本更新后先检查一次。
-- 默认偏向男主视角，有明确证据的分支或副本移入删减审计；无法确认的重复与 NPC 台词继续保留。需要双方候选时使用 `--accuracy-first`。
-- 有内嵌性别变体的记录用 `selected_variant` 声明当前正文选择；主提取选择 M，独立设定导出可用 `--protagonist M/F`。两版原始变体仍保存，选择状态不证明实际播放路线。
-- 设定机器目录按来源保留同名条目。分类、导语、截断预览和缺失值显示属于展示信息；原文查证以带来源的字段为准。
-- 活动、支线等 Chat/Bubble 演出共用结构化解析器；正文保留分支与节点证据。相邻同文、字幕称呼差异不会单独触发删减；连续三行及以上的重复段落进入质量报告供核对。
-- 多语言按“中文基础 → 中文覆盖 → 目标语言基础 → 目标语言覆盖”加载，防止中文热修覆盖译文。清洗支持嵌套布局/性别标记、换行与注音；注音显示为“正文（注音）”，原文继续保留。
-- 原显示名优先于配音别名，隐藏身份不被提前揭示；无法可靠关联的角色保留为空。`line_type=unknown` 不等于“有配音但别名缺失”，覆盖率仅对关联配音的保留行计算。
-- 章节内以内容类型、回放档案或来源编号排列，当前跨场景 `chronology_status` 为 `unknown`。局部时间排序只用于证据完整且唯一的单资源、单 section 气泡组。
-- Comic 可通过 ComicConfig、外部 CAB/PPtr、所属 Timeline 和 BubbleEvent UUID 确认漫画资源与显示名；缺引用者保留未知。CS 只确认章节关系。它们独立输出，跨场景顺序仍未还原。
-- 代理人和街头互动保留短句、同文不同来源与未确认分支；姓名和事件标题单独审计。短信按配置区分联系人、正文发送方和回复选项，零 ID、冲突或同源多角色引用保留未知，并补出长回复与附件来源。
-- 已复核的编写说明保留为 `placeholder`，原角色标注另存证据。资源节点、配音键或姓名表存在，均不能单独证明它是正式对白或实际被播放。
-- 输入下载固定同一上游提交并记录文件哈希；缺少可核验来源时标记 `source_version=unknown`。缓存指纹会随输入与资源元数据变更而重建；保留元数据的二进制改动需手动 `--refresh-speakers`。
-
-## 开发
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m ruff check .
-.\.venv\Scripts\python.exe -m pytest -q
-git diff --check
-```
-
-测试使用临时目录与构造数据，无需下载完整语料或安装游戏。缓存、提取产物、构建目录和本地环境文件均由 `.gitignore` 排除。GitHub Actions 在 Windows、Python 3.11/3.12 上运行静态检查和测试。
-
-| 路径 | 职责 |
-| --- | --- |
-| `zzz_story/cli.py`、`extract.py` | 命令行与提取主流程 |
-| `fetch.py`、`textmap.py`、`keys.py`、`chapters.py`、`clean.py` | 数据来源、键解析、章节与文本清洗 |
-| `catalog.py`、`mhy1.py`、`odin.py`、`perform*.py`、`timeline.py` | 资源索引、解码、演出节点与时间轴 |
-| `speakers.py`、`narrative.py` | 角色归因、内容分类和局部顺序证据 |
-| `content.py`、`extras.py`、`dedupe.py` | 键族登记、主线外剧情、共用分支筛选与删减来源追溯 |
-| `lore.py`、`writers.py`、`validate.py`、`content_audit.py` | 设定、导出与质量核查 |
-| `diff.py`、`upload.py` | 版本对比与语料打包上传 |
-| `tests/`、`scripts/`、`reference/` | 回归测试、辅助脚本与算法参考 |
-
-审查证据与历史统计：
-
-- [GitHub 实现对照与提取质量改进](docs/extraction-quality-2026-11-04.md)
-- [内容覆盖检查：主线外剧情与第一季过场](docs/content-coverage-review-2026-10-24.md)
-- [主线架构检查及后续场景复核](docs/mainline-architecture-review-2026-10-21.md)
-- [3.3 全量内容复查](docs/full-content-review-2026-10-21.md)
-- [已有内容补齐结果](docs/existing-content-completion-2026-10-22.md)
-- [提取稳定性审查](docs/review-2026-10-21.md)
-- [3.3.0 资源兼容记录](MODLOG.md)
-
-## 许可与致谢
-
-项目代码采用 [MIT 许可](LICENSE)。游戏文本版权归米哈游所有；本工具用于本地个人研究，请勿分发提取出的游戏文本。
-
-- mhy1 / Perform 算法参考 [simon300000/zenless-voice](https://github.com/simon300000/zenless-voice)（MIT），参考实现位于 `reference/galgame-perform.ts`。
-- Oodle 解压依赖 [pyooz](https://pypi.org/project/pyooz/)（GPLv3）；当前安装依赖已包含此包。
-- 文本与配置来自 Dimbreath 的 ZenlessData 社区整理，优先使用 [Gitea 镜像](https://git.mero.moe/dimbreath/ZenlessData)，备用 [GitHub 镜像](https://github.com/malu-no996/ZenlessData) 必须包含相同提交。
+文本与配置来自 [ZenlessData](https://git.mero.moe/dimbreath/ZenlessData)。演出资源解析参考 [zenless-voice](https://github.com/simon300000/zenless-voice)（MIT），Oodle 解压使用 [pyooz](https://pypi.org/project/pyooz/)（GPLv3）。

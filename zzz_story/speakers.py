@@ -320,7 +320,7 @@ def ongoing_tips_speakers(
     data_paths: dict[str, Path],
     text_map,
     alias_map: dict[str, str],
-    protagonist: str = "M",
+    protagonist: str | None = None,
     *,
     json_loader: Callable[[Path], object] | None = None,
 ) -> dict[str, tuple[str, str | None]]:
@@ -350,15 +350,20 @@ def ongoing_tips_speakers(
         if name and name not in _GENERIC_NAMES and name not in _TIPS_NAME_IGNORE:
             candidates.setdefault(text_key, set()).add((name, None))
             continue
-        primary, secondary = (
-            ("CIBKAFBOGCI", "PFOBGIIIICG") if protagonist == "M" else ("PFOBGIIIICG", "CIBKAFBOGCI")
-        )
-        voice = row.get(primary) or row.get(secondary) or ""
-        match = _TIPS_VOICE_RE.match(voice) if isinstance(voice, str) else None
-        alias = match.group(1) if match else None
-        speaker = resolve_alias(alias, alias_map) if alias else None
-        if speaker:
-            candidates.setdefault(text_key, set()).add((speaker, alias))
+        voices = [row.get(field) for field in ("CIBKAFBOGCI", "PFOBGIIIICG")]
+        resolved = []
+        for voice in (voices[0] or voices[1], voices[1] or voices[0]):
+            match = _TIPS_VOICE_RE.match(voice) if isinstance(voice, str) else None
+            alias = match.group(1) if match else None
+            resolved.append((resolve_alias(alias, alias_map) if alias else None, alias))
+        (male, male_alias), (female, female_alias) = resolved
+        if protagonist is None and male != female:
+            if male and female:
+                candidates.setdefault(text_key, set()).add((f"{{M#{male}}}{{F#{female}}}", None))
+            continue
+        name, alias = (female, female_alias) if protagonist == "F" else (male, male_alias)
+        if name:
+            candidates.setdefault(text_key, set()).add((name, alias))
     out = {}
     for text_key, choices in candidates.items():
         names = {name for name, _ in choices}
@@ -369,7 +374,7 @@ def ongoing_tips_speakers(
     return out
 
 
-def ongoing_voice_names(data_paths: dict[str, Path], text_map, protagonist: str = "M", *,
+def ongoing_voice_names(data_paths: dict[str, Path], text_map, protagonist: str | None = None, *,
                         json_loader: Callable[[Path], object] | None = None) -> dict[str, list[dict]]:
     """Keep display-name evidence scoped to a complete configured voice key.
 
@@ -394,14 +399,19 @@ def ongoing_voice_names(data_paths: dict[str, Path], text_map, protagonist: str 
         if not name or name in _GENERIC_NAMES or name in _TIPS_NAME_IGNORE:
             continue
         # Preserve the displayed identity for the selected protagonist route.
-        name = clean_text(name, protagonist).text
-        fields = ("CIBKAFBOGCI", "PFOBGIIIICG") if protagonist == "M" else ("PFOBGIIIICG", "CIBKAFBOGCI")
-        voice = next((row.get(field) for field in fields if row.get(field)), None)
-        if not isinstance(voice, str) or not voice or voice.startswith(("Play_", "Stop_")):
-            continue
-        candidates.setdefault(voice, []).append({"source": "FileCfg/OngoingTipsConfigTemplateTb.json",
-                                                "source_key": text_key, "name_key": name_key, "name": name,
-                                                "row_id": row.get("IDGNMKGGEGK")})
+        male, female = row.get("CIBKAFBOGCI"), row.get("PFOBGIIIICG")
+        for voice, side in dict.fromkeys(((male or female, "M"), (female or male, "F"))):
+            if protagonist and side != protagonist:
+                continue
+            if not isinstance(voice, str) or not voice or voice.startswith(("Play_", "Stop_")):
+                continue
+            display = name if not protagonist and (not male or not female or male == female) else clean_text(name, side).text
+            evidence = {"source": "FileCfg/OngoingTipsConfigTemplateTb.json",
+                        "source_key": text_key, "name_key": name_key, "name": display,
+                        "row_id": row.get("IDGNMKGGEGK")}
+            entries = candidates.setdefault(voice, [])
+            if not entries or entries[-1] != evidence:
+                entries.append(evidence)
     return {voice: evidence for voice, evidence in candidates.items()
             if len({item["name"] for item in evidence}) == 1}
 
@@ -444,6 +454,7 @@ def build_speaker_index(
     cache_path: Path,
     refresh: bool = False,
     no_speakers: bool = False,
+    protagonist: str | None = None,
     en_map: dict[str, str] | None = None,
     json_loader: Callable[[Path], object] | None = None,
 ) -> tuple["SpeakerIndex", SpeakerStats]:
@@ -461,7 +472,7 @@ def build_speaker_index(
     load_json = json_loader or read_json
     alias_map = load_alias_map(text_map, en_map, load_json(avatar_path))
     print(f"  alias table: {len(alias_map)} entries (EN names + AvatarBase)")
-    tips = ongoing_tips_speakers(data_paths, text_map, alias_map, "M", json_loader=load_json)
+    tips = ongoing_tips_speakers(data_paths, text_map, alias_map, protagonist, json_loader=load_json)
     if tips:
         print(f"  ongoing tips: {len(tips)} speaker keys")
 
@@ -493,7 +504,7 @@ def build_speaker_index(
             )
             stats.tips_speakers += 1
     stats.tips_speakers += resolve_ongoing_voice_names(
-        speakers, ongoing_voice_names(data_paths, text_map, "M", json_loader=load_json), text_map)
+        speakers, ongoing_voice_names(data_paths, text_map, protagonist, json_loader=load_json), text_map)
     _recount_speaker_gaps(speakers, stats)
     return _index_from_speakers(speakers, text_keys, stats, option_keys), stats
 

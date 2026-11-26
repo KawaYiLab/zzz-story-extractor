@@ -116,3 +116,20 @@ def clean_text(raw: str, protagonist: str = "F") -> CleanedText:
     variants = {gender: value for gender, value in texts.items() if value}
     chosen = texts.get(protagonist) or texts["M"] or texts["F"]
     return CleanedText(chosen, variants if len(set(variants.values())) > 1 else None)
+
+
+def dialogue_readings(cleaned: CleanedText, speaker: str | None, route: str | None):
+    """Yield each distinct (text, speaker) reading of this source for the index."""
+    name = clean_text(speaker, route or "M") if speaker else CleanedText("")
+    texts, names = cleaned.variants or {}, name.variants or {}
+    sides = (route,) if route or not (texts or names) else ("M", "F")
+    for side in sides:
+        yield side, texts.get(side, cleaned.text), names.get(side, name.text) or None
+
+
+def catalog_text(raw: str) -> str:
+    """The MCP has one title or synopsis per scene."""
+    cleaned = clean_text(raw, "M")
+    if cleaned.variants:
+        return f"哲视角：{cleaned.variants['M']} / 铃视角：{cleaned.variants['F']}"
+    return cleaned.text

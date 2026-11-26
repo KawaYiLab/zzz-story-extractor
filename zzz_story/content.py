@@ -26,6 +26,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from .keys import split_scene_variant
 from .partner_dialogue import PARTNER_DIALOGUE_PREFIXES
 from .street_dialogue import STREET_DIALOGUE_PREFIXES
 
@@ -143,7 +144,8 @@ def parse_suffix(suffix: str) -> tuple[str, int, tuple[int, ...], str | None, bo
     Returns ``(kind, line_no, sub_numbers, variant, option)``.
     """
     if re.search(r"(?:^|_)(?:Name|name)(?:_|\d|[MF]?$)", suffix):
-        variant = "F" if re.search(r"\d+F$", suffix) else None
+        match = re.search(r"(?:Name|name)_?\d*([MF])$", suffix)
+        variant = match[1] if match else None
         return ("name", 0, (), variant, False)
     core = re.sub(r"_Main$", "", suffix)
     if not re.fullmatch(r"(?:\d+[MF]?|Option\d+[MF]?)(?:_(?:\d+[MF]?|Option\d+[MF]?))*", core, re.IGNORECASE):
@@ -231,10 +233,7 @@ def classify_key(key: str) -> ContentKey | None:
         if not suffix:
             scene, suffix = "0", scene
         # SideChat_Chapter03_0002F_01: the F marks the female scene copy.
-        variant = None
-        scene_match = re.fullmatch(r"(\d+)([MF])", scene)
-        if scene_match:
-            scene, variant = scene_match.group(1), scene_match.group(2)
+        scene, variant = split_scene_variant(scene)
         kind, line_no, sub, line_variant, option = parse_suffix(suffix)
         if kind == "line" and line_no == 0 and not sub:
             # ``_00`` rows of SideChat hold the speaker of the conversation.
@@ -253,7 +252,8 @@ def classify_key(key: str) -> ContentKey | None:
     match = _LEGACY_CHAT_RE.match(key)
     if match:
         kind, line_no, sub, variant, option = parse_suffix(match["suffix"])
-        return ContentKey(key, "legacy", "Chat", f"Chat{match['tag']}", match["scene"], kind, line_no, sub, variant, option)
+        scene, scene_variant = split_scene_variant(match["scene"])
+        return ContentKey(key, "legacy", "Chat", f"Chat{match['tag']}", scene, kind, line_no, sub, variant or scene_variant, option)
     return None
 
 

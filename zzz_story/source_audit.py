@@ -47,11 +47,12 @@ def collect_source_variants(text_map, keys: Iterable[str] | None = None) -> list
 
 def annotate_source_variants(records: list[dict], variants: list[dict]) -> None:
     """Attach source evidence to the base record without altering stable IDs."""
-    by_key = {record["source_key"]: record for record in records}
+    by_key: dict[str, list[dict]] = {}
     for variant in variants:
-        base = by_key.get(variant["base_source_key"])
-        if base is not None:
-            base.setdefault("source_variants", []).append(variant)
+        by_key.setdefault(variant["base_source_key"], []).append(variant)
+    for record in records:
+        if evidence := by_key.get(record["source_key"]):
+            record["source_variants"] = evidence
 
 
 def collect_empty_sources(

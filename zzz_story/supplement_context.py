@@ -395,7 +395,7 @@ def scan_comic_context(game_dir: Path | None, perform: object, cache_path: Path 
     return result
 
 
-def annotate_supplement_context(records: list[dict], context: dict) -> dict[str, int]:
+def annotate_supplement_context(records: list[dict], context: dict, *, protagonist: str | None = None) -> dict[str, int]:
     """Attach exact occurrences while retaining the supplement's stable ID."""
     stats = {"comic_linked": 0, "comic_named": 0, "comic_conflicting_names": 0}
     for record in records:
@@ -423,7 +423,8 @@ def annotate_supplement_context(records: list[dict], context: dict) -> dict[str,
         record["comic_context"] = items
         record["comic_scenes"] = sorted({item["comic"] for item in items})
         record["context_chronology_status"] = "within_timeline" if len({(item["asset"], item["timeline_path_id"]) for item in items}) == 1 else "unknown"
-        names = {clean_text(item["display_name"], "M").text for item in items if item.get("display_name")}
+        names = {clean_text(item["display_name"], protagonist).text if protagonist else item["display_name"]
+                 for item in items if item.get("display_name")}
         if len(names) == 1 and all(item.get("display_name") for item in items):
             record["speaker"] = next(iter(names))
             record["speaker_source"] = "comic_bubble"

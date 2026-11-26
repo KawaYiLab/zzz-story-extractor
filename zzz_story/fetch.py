@@ -202,6 +202,8 @@ def ensure_data(
     lang: str = "CHS",
     refresh: bool = False,
     data_dir: Path | None = None,
+    *,
+    game_version: str = "",
 ) -> dict[str, Path]:
     """Return absolute paths for the files the extractor needs."""
     lang = lang.upper()
@@ -215,10 +217,18 @@ def ensure_data(
 
     target = CACHE_ROOT / DEFAULT_VERSION
     print(f"Preparing ZenlessData cache at {target}")
+    provenance = None
     if not refresh and all((target / rel).is_file() for rel in required):
-        if (target / SOURCE_PROVENANCE).exists() and _verified_provenance(target, required) is None:
-            raise ValueError("缓存来源哈希不一致或不完整；请用 --refresh 重建完整快照")
-        return {rel: target / rel for rel in required}
+        if not (target / SOURCE_PROVENANCE).exists():
+            return {rel: target / rel for rel in required}
+        provenance = _verified_provenance(target, required)
+        local = re.search(r"\d+\.\d+\.\d+", game_version)
+        if provenance:
+            if not local or local.group() == provenance.get("version"):
+                return {rel: target / rel for rel in required}
+            print("本机游戏与缓存版本不同，正在检查数据源……")
+        else:
+            print("数据缓存不完整，正在重新下载……")
 
     # Download the entire required snapshot before replacing any existing data.
     # A failed refresh preserves the old cache. Hash verification detects an
@@ -228,6 +238,8 @@ def ensure_data(
     from .writers import write_json
     target.parent.mkdir(parents=True, exist_ok=True)
     commit, version = _upstream_snapshot()
+    if provenance and commit == provenance["commit"]:
+        return {rel: target / rel for rel in required}
     bases = (f"https://git.mero.moe/dimbreath/ZenlessData/raw/commit/{commit}",
              f"https://raw.githubusercontent.com/malu-no996/ZenlessData/{commit}")
     with tempfile.TemporaryDirectory(prefix="snapshot-", dir=target.parent) as staging:

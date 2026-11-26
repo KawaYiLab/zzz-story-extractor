@@ -5,6 +5,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .clean import clean_text
+from .dedupe import paired_route_order, referenced_sides
+
 
 @dataclass(frozen=True)
 class ParsedKey:
@@ -17,9 +20,14 @@ class ParsedKey:
     sub_no: int | None = None
     variant: str | None = None
 
+    @property
+    def route_variant(self) -> str | None:
+        # The source scene spelling is part of published line IDs (e.g. 0059F).
+        return self.variant or split_scene_variant(self.scene)[1]
+
 
 _LINE_RE = re.compile(r"^(\d+)(?:_(\d+))?([MF])?$")
-_NAME_RE = re.compile(r"^(?:Name|name)(?:_?(\d+))?([MF])?$")
+_NAME_RE = re.compile(r"(?:^|_)(?:Name|name)(?:_?(\d+))?([MF])?$")
 _OPTION_RE = re.compile(r"^Option(\d+)_(\d+)([MF])?$", re.IGNORECASE)
 # Season-1 cutscenes: ``03_Option1_02F_Main`` (line 3, option group 1, entry 2).
 _LEGACY_OPTION_RE = re.compile(r"^(\d+)_Option(\d+)(?:_(\d+))?([MF])?(?:_Main)?$", re.IGNORECASE)
@@ -29,16 +37,56 @@ _LEGACY_OPTION_RE = re.compile(r"^(\d+)_Option(\d+)(?:_(\d+))?([MF])?(?:_Main)?$
 LEGACY_GALGAME_RE = re.compile(r"^GalGame_(Chapter\d+)_([^_]+)_(.+)$")
 
 
+def split_scene_variant(scene: str) -> tuple[str, str | None]:
+    if re.fullmatch(r"(?:Inlevel_)?\d+[MF]", scene):
+        return scene[:-1], scene[-1]
+    return scene, None
+
+
+def source_gender_pairs(variants: dict[str, str | None], text_map, speaker_index=None) -> dict[str, tuple[str, str]]:
+    """Pair nonempty exported sources with the same spelling except for a route marker.
+
+    The older tables use an unmarked key for Wise and an F on the line,
+    choice, cast name or scene for Belle. Prefer an explicit M/F pair when
+    present. An ambiguous or missing counterpart leaves all candidates intact.
+    """
+    alternatives: dict[str, list[str]] = {}
+    for key, variant in variants.items():
+        if variant != "F":
+            continue
+        markers = list(re.finditer(r"(?:(?<=\d)|(?<=[Nn]ame))F(?=_|$)", key))
+        if len(markers) != 1:
+            continue
+        pos = markers[0].start()
+        male = key[:pos] + "M" + key[pos + 1:]
+        if variants.get(male) != "M":
+            male = key[:pos] + key[pos + 1:]
+            if male not in variants or variants[male] is not None:
+                continue
+        if clean_text(text_map.get(key), "F").text and clean_text(text_map.get(male), "M").text:
+            alternatives.setdefault(male, []).append(key)
+
+    def sides(key: str) -> set[str]:
+        info = speaker_index.lookup(key) if speaker_index else None
+        return referenced_sides(info.perform, info.timeline) if info else set()
+
+    pairs = {}
+    for male, females in alternatives.items():
+        if len(females) == 1:
+            female = females[0]
+            order = paired_route_order(sides(male), sides(female))
+            if order:
+                pairs[male] = (female, order[0])
+                pairs[female] = (male, order[1])
+    return pairs
+
+
 def _parse_suffix(suffix: str) -> tuple[str, int | None, int | None, str | None]:
     if not suffix:
         return ("other", None, None, None)
 
     # Names are not dialogue lines; they are collected as scene cast.
-    if suffix.startswith(("Name", "name")):
-        match = _NAME_RE.match(suffix)
-        variant = match.group(2) if match else None
-        return ("name", None, None, variant)
-    if "_Name" in suffix or "_name" in suffix:
+    if suffix.startswith(("Name", "name")) or "_Name" in suffix or "_name" in suffix:
         match = _NAME_RE.search(suffix)
         variant = match.group(2) if match else None
         return ("name", None, None, variant)
@@ -78,6 +126,11 @@ def _split_scene_chapter(rest: str, family: str) -> tuple[str, str, str] | None:
     return chapter, scene, suffix
 
 
+def _scene_key(key: str, family: str, chapter: str, scene: str, suffix: str) -> ParsedKey:
+    kind, line_no, sub_no, variant = _parse_suffix(suffix)
+    return ParsedKey(key, family, chapter, scene, kind, line_no, sub_no, variant)
+
+
 def parse_key(key: str) -> ParsedKey | None:
     if not key:
         return None
@@ -90,15 +143,11 @@ def parse_key(key: str) -> ParsedKey | None:
         split = _split_scene_chapter(rest, family)
         if not split:
             return None
-        chapter, scene, suffix = split
-        kind, line_no, sub_no, variant = _parse_suffix(suffix)
-        return ParsedKey(key, family, chapter, scene, kind, line_no, sub_no, variant)
+        return _scene_key(key, family, *split)
 
     match = LEGACY_GALGAME_RE.match(key)
     if match:
-        chapter, scene, suffix = match.groups()
-        kind, line_no, sub_no, variant = _parse_suffix(suffix)
-        return ParsedKey(key, "GalGame", chapter, scene, kind, line_no, sub_no, variant)
+        return _scene_key(key, "GalGame", *match.groups())
 
     if key.startswith("MainChat_"):
         rest = key[len("MainChat_"):]
@@ -117,8 +166,7 @@ def parse_key(key: str) -> ParsedKey | None:
             if "_" not in rest:
                 return None
             scene, suffix = rest.split("_", 1)
-        kind, line_no, sub_no, variant = _parse_suffix(suffix)
-        return ParsedKey(key, "MainChat", chapter, scene, kind, line_no, sub_no, variant)
+        return _scene_key(key, "MainChat", chapter, scene, suffix)
 
     if key.startswith("Comic_"):
         return ParsedKey(key, "Comic", "", key[len("Comic_"):], "line", 0, None, None)

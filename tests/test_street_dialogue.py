@@ -41,15 +41,11 @@ def test_street_resource_names_and_verified_routes_preserve_audit(tmp_path):
     base = {"explicit_gender": True, "sides": ["M"], "paired_key": female}
     index = SpeakerIndex({male: SpeakerInfo("店员", None, .98, "perform", perform=base),
                           female: SpeakerInfo("店员", None, .98, "perform", perform={**base, "sides": ["F"], "paired_key": male})}, SpeakerStats())
-    for accuracy in (False, True):
-        directory = tmp_path / str(accuracy)
-        stats = extract_street(TextMap(values, "CHS"), directory, speaker_index=index, accuracy_first=accuracy)
-        rows = [json.loads(line) for line in (directory / "dialogue-audit.jsonl").read_text(encoding="utf-8").splitlines()]
-        assert len(rows) == 2
-        assert stats["lore_street_lines"] == (2 if accuracy else 1)
-        assert all(r["speaker"] == "店员" and r["speaker_status"] == "resolved" for r in rows)
-        assert rows[1]["retained"] == accuracy
-        assert rows[1]["paired_source_key"] == (None if accuracy else male)
+    stats = extract_street(TextMap(values, "CHS"), tmp_path, speaker_index=index)
+    rows = [json.loads(line) for line in (tmp_path / "dialogue-audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert stats["lore_street_lines"] == len(rows) == 2
+    assert all(r["speaker"] == "店员" and r["speaker_status"] == "resolved" and r["retained"] for r in rows)
+    assert [r["perform"]["sides"] for r in rows] == [["M"], ["F"]]
 
 
 def test_street_legacy_bubble_passerby_families_are_preserved(tmp_path):

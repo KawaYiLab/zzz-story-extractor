@@ -51,7 +51,7 @@ def check(output: Path, data_dir: Path) -> dict:
     _, header = next(document_rows)
     if header.get("schema_version") != 1 or header.get("record_type") != "manifest":
         raise ValueError("documents.jsonl must start with a version 1 manifest")
-    protagonist = header.get("protagonist")
+    protagonist = header.get("protagonist", "M")
     if protagonist not in {"M", "F"}:
         raise ValueError("documents.jsonl manifest protagonist must be M or F")
     covered = header.get("covered_source_files")
@@ -81,7 +81,7 @@ def check(output: Path, data_dir: Path) -> dict:
         # Omitted raw_text is allowed only when the original is unchanged.
         expect(provided == raw if provided is not None else row.get("text") == raw,
                f"{context}: raw_text differs from TextMap {key}")
-        cleaned = clean_text(raw, requested)
+        cleaned = clean_text(raw, row.get("selected_variant") or requested)
         expect(row.get("text") == cleaned.text, f"{context}: text differs from cleaned source {key}")
         expect(row.get("text_variants") == cleaned.variants,
                f"{context}: text_variants differ from original source {key}")

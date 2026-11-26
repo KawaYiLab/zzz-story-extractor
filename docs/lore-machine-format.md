@@ -7,7 +7,7 @@ parsing Markdown. The existing bundle format remains 1.
 The first nonempty record is a manifest:
 
 ```json
-{"schema_version":1,"record_type":"manifest","protagonist":"M","covered_source_files":["README.md","agents/00_代理人全景总览.md","agents/01_狡兔屋.md"]}
+{"schema_version":1,"record_type":"manifest","covered_source_files":["README.md","agents/00_代理人全景总览.md","agents/01_狡兔屋.md"]}
 ```
 
 Paths are relative to `lore/`, use `/`, and name files whose content is fully
@@ -32,8 +32,7 @@ value in `raw_text` when cleaning changes it (otherwise null means identical
 to `text`), its cleaned selected rendering in `text`, and separate
 M/F renderings in `text_variants` when they differ. `selected_variant` is the
 actual M/F selection when different inline gender variants exist, including
-fallback when the requested branch is empty; it is null otherwise. The overall
-rendering view is declared by the manifest protagonist.
+fallback when a branch is empty. The importer indexes each distinct rendering.
 Source keys with identical text remain distinct. Each item is one source field,
 including multiline source values; labels, speaker prefixes and branch labels
 are not inserted into `text`.

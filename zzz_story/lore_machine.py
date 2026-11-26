@@ -156,7 +156,7 @@ class Documents:
             for item in doc["items"]:
                 if item["section_kind"] not in SECTION_KINDS:
                     raise ValueError(f"unknown section kind: {item['section_kind']}")
-        header = {"schema_version": SCHEMA_VERSION, "record_type": "manifest", "protagonist": self.protagonist,
+        header = {"schema_version": SCHEMA_VERSION, "record_type": "manifest",
                   "covered_source_files": covered}
         write_jsonl([header, *docs], lore_dir / "documents.jsonl")
         return {"lore_machine_documents": len(docs), "lore_machine_items": sum(len(d["items"]) for d in docs),

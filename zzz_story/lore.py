@@ -9,6 +9,7 @@ from typing import Any
 
 from . import lore_machine as machine_output
 from .clean import clean_text
+from .dedupe import display_side
 from .message_config import load_message_metadata, source_identity
 from .narrative import annotate_attribution
 from .partner_dialogue import parse_partner_dialogue, sequence_order
@@ -335,14 +336,13 @@ def extract_lore(
     out_dir: Path,
     *,
     speaker_index=None,
-    accuracy_first: bool = False,
     data_paths: dict[str, Path] | None = None,
     protagonist: str = "M",
 ) -> dict[str, int]:
     """Extract all worldview / lore categories and output structured Markdown files."""
     lore_dir = out_dir / "lore"
     if lore_dir.exists():
-        raise FileExistsError(f"设定目录已存在：{lore_dir}；请指定新的 --out，避免混入旧设定")
+        raise FileExistsError(f"设定目录已存在：{lore_dir}")
     lore_dir.mkdir(parents=True, exist_ok=True)
 
     machine = machine_output.Documents(text_map, protagonist)
@@ -351,14 +351,14 @@ def extract_lore(
     stats: dict[str, int] = {}
 
     stats.update(_extract_agents(text_map, avatar_base_data, lore_dir / "agents",
-                                speaker_index=speaker_index, accuracy_first=accuracy_first, protagonist=protagonist))
+                                speaker_index=speaker_index, protagonist=protagonist))
     stats.update(_extract_equipment(text_map, lore_dir / "equipment", avatar_base_data, protagonist=protagonist))
     stats.update(_extract_interknot(text_map, lore_dir / "interknot",
                                    message_metadata=load_message_metadata(data_paths, text_map, protagonist=protagonist), protagonist=protagonist))
     stats.update(_extract_cinema(text_map, lore_dir / "cinema", protagonist=protagonist))
     stats.update(_extract_glossary(text_map, lore_dir / "glossary", protagonist=protagonist))
     stats.update(extract_street(text_map, lore_dir / "street",
-                                speaker_index=speaker_index, accuracy_first=accuracy_first, protagonist=protagonist))
+                                speaker_index=speaker_index, protagonist=protagonist))
 
     _generate_lore_index(lore_dir, stats)
     stats.update(machine.write(lore_dir))
@@ -371,7 +371,6 @@ def _extract_agents(
     agents_dir: Path,
     *,
     speaker_index=None,
-    accuracy_first: bool = False,
     protagonist: str = "M",
 ) -> dict[str, int]:
     agents_dir.mkdir(parents=True, exist_ok=True)
@@ -424,8 +423,9 @@ def _extract_agents(
         aid = tag_to_aid.get((parsed.agent_tag or "").lower())
         if aid not in playable_ids:
             aid = None
-        ct = clean_text(raw, parsed.variant if parsed.variant in {"M", "F"} else protagonist)
-        display = clean_text(info.speaker, parsed.variant if parsed.variant in {"M", "F"} else protagonist).text if info and info.speaker else None
+        gender = display_side(info, parsed.variant, protagonist)
+        ct = clean_text(raw, gender)
+        display = clean_text(info.speaker, gender).text if info and info.speaker else None
         is_option = (display in {"选项", "玩家选项"}
                      or bool(speaker_index and speaker_index.is_option(key)) or "_Option" in key)
         display_role = display if display in {"选项", "玩家选项", "旁白", "玩家"} else None
@@ -433,7 +433,7 @@ def _extract_agents(
         row = {
             "source_key": key, "raw_text": raw, "text": ct.text,
             "text_variants": ct.variants, "variant": parsed.variant,
-            "selected_variant": machine_output.selected_variant(ct, parsed.variant if parsed.variant in {"M", "F"} else protagonist),
+            "selected_variant": machine_output.selected_variant(ct, gender),
             "scope": parsed.scope, "family": parsed.family,
             "event_id": parsed.event, "event_tag": parsed.agent_tag,
             "chapter": parsed.scope, "scene": parsed.event,
@@ -455,20 +455,6 @@ def _extract_agents(
         # The source family is part of an event's identity. Chat and bubble
         # resources with the same numeric ID are not one dialogue stream.
         streams[(aid, parsed.group)].append(row)
-
-    for rows in streams.values():
-        available = {row["source_key"]: row for row in rows}
-        for row in rows:
-            link = row.get("perform") or {}
-            peer = available.get(link.get("paired_key"))
-            peer_link = (peer or {}).get("perform") or {}
-            removed = (not accuracy_first and row["retained"] and peer and peer["retained"]
-                       and link.get("explicit_gender") and link.get("sides") == ["F"]
-                       and peer_link.get("explicit_gender") and peer_link.get("sides") == ["M"]
-                       and peer_link.get("paired_key") == row["source_key"])
-            if removed:
-                row.update(retained=False, reason="perform_gender_route",
-                           paired_source_key=peer["source_key"])
 
     def rendered_dialogues(values):
         result = []

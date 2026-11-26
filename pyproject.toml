@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "zzz-story-extractor"
 version = "0.3.0"
-description = "Extract Zenless Zone Zero main-story text with per-line speakers."
+description = "Build the Zenless Zone Zero corpus for the InterKnot story archive."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

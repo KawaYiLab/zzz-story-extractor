@@ -19,16 +19,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from .chapters import chapter_info
-from .clean import clean_text
+from .clean import clean_text, dialogue_readings
 from .content import DOMAIN_LABELS, EXTRA_DOMAINS, ContentKey, classify_key
-from .dedupe import (
-    _discarded_record,
-    _filter_perform_routes,
-    _filter_timeline_copies,
-    resolve_discard_pairs,
-)
+from .dedupe import display_side
 from .event_names import EventName, infer_event_names
-from .keys import natural_scene_key
+from .keys import natural_scene_key, source_gender_pairs
 from .narrative import annotate_attribution
 
 # Within a group, keep families in the mainline reading order.
@@ -48,8 +43,6 @@ NAMED_DOMAINS = ("activity", "side")
 DOMAIN_ORDER_BASE = 1_000_000
 _INLINE_SPEAKER_RE = re.compile(r"^(?P<name>[^\s：:「」“”()（）]{1,12})[：:]\s*「(?P<text>.+)」$", re.S)
 _NAME_IGNORE = {"选项", "玩家选项", "旁白", "？？？", "???"}
-_F_SUFFIX_RE = re.compile(r"(\d)F((?:_Main)?)$")
-_F_SCENE_RE = re.compile(r"_(\d+)F_")
 
 
 @dataclass
@@ -58,9 +51,6 @@ class ExtraStats:
     name_keys: int = 0
     lines: int = 0
     speaker_lines: int = 0
-    gender_copies: int = 0
-    adjacent_duplicates: int = 0
-    structured_filtered: int = 0
     named_groups: int = 0
     group_names: dict[str, dict] = field(default_factory=dict)
     by_domain: dict[str, int] = field(default_factory=dict)
@@ -75,15 +65,6 @@ def candidate_keys(text_map, domains: Iterable[str] = EXTRA_DOMAINS) -> list[Con
         if parsed is not None and parsed.domain in wanted and parsed.kind in {"line", "name"}:
             out.append(parsed)
     return out
-
-
-def _male_twin(key: str, text_map) -> str | None:
-    """Return the base key a female-protagonist copy duplicates, if present."""
-    for pattern, repl in ((_F_SUFFIX_RE, r"\1\2"), (_F_SCENE_RE, r"_\1_")):
-        twin = pattern.sub(repl, key, count=1)
-        if twin != key and twin in text_map:
-            return twin
-    return None
 
 
 def group_label(domain: str, tag: str, name: EventName | None = None) -> str:
@@ -103,15 +84,12 @@ def extract_extras(
     text_map,
     *,
     speaker_index=None,
-    accuracy_first: bool = False,
-    dedupe: bool = True,
-    keep_raw: bool = False,
     scene_order: dict[str, tuple[int, int]] | None = None,
     quest_names: dict[int, str] | None = None,
     domains: Iterable[str] = EXTRA_DOMAINS,
     candidates: list[ContentKey] | None = None,
-) -> tuple[list[dict], list[dict], ExtraStats]:
-    """Return ``(records, discarded, stats)`` for the selected extra domains.
+) -> tuple[list[dict], ExtraStats]:
+    """Return ``(records, stats)`` for the selected extra domains.
 
     ``candidates`` may reuse ``candidate_keys(text_map, domains)`` from the
     caller's speaker-input preparation; no second classification is needed.
@@ -120,43 +98,34 @@ def extract_extras(
     scene_order = scene_order or {}
     quest_names = quest_names or {}
     names: dict[tuple[str, str, str], list[str]] = {}
-    pending: list[tuple[ContentKey, str, str, dict | None]] = []
-    discarded: list[dict] = []
-    clean_cache: dict[tuple[str, str], tuple[str, dict | None]] = {}
+    pending = []
     if candidates is None:
         candidates = candidate_keys(text_map, domains)
-    line_keys = {parsed.key for parsed in candidates if parsed.kind == "line"}
+    pairs = source_gender_pairs({p.key: p.variant for p in candidates}, text_map, speaker_index)
 
     for parsed in candidates:
         stats.candidate_keys += 1
         raw = text_map.get(parsed.key)
         if not raw:
             continue
-        gender = parsed.variant if parsed.variant in {"M", "F"} else "M"
-        cleaned = clean_cache.get((raw, gender))
-        if cleaned is None:
-            result = clean_text(raw, gender)
-            cleaned = clean_cache[(raw, gender)] = (result.text, result.variants)
-        text, variants = cleaned
-        if not text:
+        info = speaker_index.lookup(parsed.key) if speaker_index else None
+        route = pairs[parsed.key][1] if parsed.key in pairs else display_side(info, parsed.variant)
+        cleaned = clean_text(raw, route or "M")
+        if not cleaned.text:
             continue
         if parsed.kind == "name":
             stats.name_keys += 1
             bucket = names.setdefault((parsed.group, parsed.family, parsed.scene), [])
-            if text not in bucket and text not in _NAME_IGNORE:
-                bucket.append(text)
+            for _, name, _ in dialogue_readings(cleaned, None, route):
+                if name not in bucket and name not in _NAME_IGNORE:
+                    bucket.append(name)
             continue
-        if not accuracy_first and parsed.variant == "F":
-            twin = _male_twin(parsed.key, text_map)
-            if twin in line_keys and clean_text(text_map.get(twin), "M").text:
-                stats.gender_copies += 1
-                discarded.append(_discard(parsed, text, raw, "explicit_gender_variant", twin))
-                continue
-        pending.append((parsed, text, raw, variants))
+        for side, text, speaker in dialogue_readings(cleaned, info.speaker if info else None, route):
+            pending.append((parsed, text, raw, cleaned.variants, side, speaker))
 
     # Infer per domain so tags are matched bare (``ZenkovS1``, not ``side.ZenkovS1``).
     sources: dict[str, dict[str, dict]] = {}
-    for parsed, text, _raw, _variants in pending:
+    for parsed, text, *_ in pending:
         if parsed.domain in NAMED_DOMAINS:
             tag = parsed.group.split(".", 1)[1]
             group = sources.setdefault(parsed.domain, {}).setdefault(tag, {"scenes": set(), "text": []})
@@ -190,7 +159,8 @@ def extract_extras(
     group_orders: dict[str, int] = {}
     domain_groups: dict[str, int] = {}
     records: list[dict] = []
-    for parsed, text, raw, variants in pending:
+    seen_keys = set()
+    for parsed, text, raw, variants, gender, speaker in pending:
         if parsed.group not in group_orders:
             index = domain_groups.get(parsed.domain, 0)
             domain_groups[parsed.domain] = index + 1
@@ -198,8 +168,6 @@ def extract_extras(
                 DOMAIN_ORDER_BASE * (EXTRA_DOMAINS.index(parsed.domain) + 1) + index * 10
             )
         info = speaker_index.lookup(parsed.key) if speaker_index is not None else None
-        gender = parsed.variant if parsed.variant in {"M", "F"} else "M"
-        speaker = clean_text(info.speaker, gender).text if info and info.speaker else None
         if speaker in {"选项", "玩家选项", "旁白"}:
             speaker = None
         speaker_source = info.source if speaker else "none"
@@ -220,7 +188,7 @@ def extract_extras(
             quest_name = quest_names.get(archived[1])
         tag = parsed.tag or parsed.family
         record = {
-            "line_id": "EX_" + parsed.key,
+            "line_id": "EX_" + parsed.key + (":F" if parsed.key in seen_keys else ""),
             "domain": parsed.domain,
             "chapter": parsed.group,
             "chapter_label": group_label(parsed.domain, tag, event_names.get(parsed.group)),
@@ -237,9 +205,9 @@ def extract_extras(
             "speaker_source": speaker_source,
             "has_voice": bool(info and info.has_voice),
             "text": text,
-            "raw_text": raw if keep_raw or accuracy_first or raw != text else None,
+            "raw_text": raw if raw != text else None,
             "text_variants": variants,
-            "selected_variant": gender if variants else None,
+            "selected_variant": gender,
             "source_key": parsed.key,
             "line_type": line_type,
             "scene_speakers": list(names.get((parsed.group, parsed.family, parsed.scene), [])),
@@ -257,16 +225,9 @@ def extract_extras(
                 record["timeline"] = info.timeline
                 record["context_status"] = "resource_linked"
         records.append(record)
+        seen_keys.add(parsed.key)
 
     annotate_attribution(records)
-    if not accuracy_first:
-        all_records = records
-        records, dropped = _filter_perform_routes(records, copies=dedupe)
-        stats.structured_filtered += dropped
-        records, dropped = _filter_timeline_copies(records, copies=dedupe)
-        stats.structured_filtered += dropped
-        discarded.extend(_discarded_record(row) for row in all_records if row.get("_discard_reason"))
-    resolve_discard_pairs(records, discarded)
 
     for index, record in enumerate(records, 1):
         record["order"] = index
@@ -277,54 +238,4 @@ def extract_extras(
         stats.speaker_lines += bool(record.get("speaker"))
         stats.by_domain[record["domain"]] = stats.by_domain.get(record["domain"], 0) + 1
         stats.groups[record["chapter"]] = stats.groups.get(record["chapter"], 0) + 1
-    return records, discarded, stats
-
-
-def _discard(parsed: ContentKey, text: str, raw: str, reason: str, paired: str) -> dict:
-    return {
-        "source_key": parsed.key,
-        "domain": parsed.domain,
-        "chapter": parsed.group,
-        "scene": parsed.scene,
-        "family": parsed.family,
-        "text": text,
-        "raw_text": raw,
-        "reason": reason,
-        "paired_source_key": paired,
-    }
-
-
-def render_extra_txt(records: list[dict]) -> str:
-    chunks = [
-        "# 绝区零活动、支线与代理人剧情",
-        "",
-        "按来源表分组；场景按来源键编号排列，不代表游戏内播放先后。",
-    ]
-    current_domain = current_group = current_scene = None
-    for record in records:
-        if record["domain"] != current_domain:
-            current_domain = record["domain"]
-            current_group = None
-            chunks.extend(["", f"## {DOMAIN_LABELS.get(current_domain, current_domain)}"])
-        if record["chapter"] != current_group:
-            current_group = record["chapter"]
-            current_scene = None
-            chunks.extend(["", f"### {record['chapter_label']}"])
-        scene_key = (record["family"], record["scene"])
-        if scene_key != current_scene:
-            current_scene = scene_key
-            title = record.get("quest_name") or f"{record['family']} {record['scene']}"
-            chunks.extend(["", f"#### {title}"])
-            if record.get("scene_speakers"):
-                chunks.append(f"（姓名表：{'、'.join(record['scene_speakers'])}；不代表逐句署名）")
-            if record.get("scene_intro"):
-                chunks.append(f"> 梗概：{record['scene_intro']}")
-            chunks.append("")
-        text = record["text"]
-        if record.get("line_type") == "option":
-            chunks.append(f"> 选项：{text}")
-        elif record.get("speaker") and record.get("speaker_source") != "inline":
-            chunks.append(f"{record['speaker']}：{text}")
-        else:
-            chunks.append(text)
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(chunks).strip()) + "\n"
+    return records, stats

@@ -6,7 +6,6 @@ from zzz_story.fetch import SOURCE_VERSION_CACHE, fetch_source_version
 from zzz_story.speakers import CACHE_VERSION, SpeakerStats, _perform_speakers
 from zzz_story.textmap import TextMap
 from zzz_story.validate import validate_records
-from zzz_story.writers import write_supplement_txt
 
 
 def test_review_legacy_version_label_is_not_verified(tmp_path, monkeypatch):
@@ -31,33 +30,6 @@ def test_review_supplement_ids_are_validated():
     main = [{"line_id":"same", "chapter":"Chapter00", "chapter_label":"序章"}]
     sup = [{"line_id":"same", "chapter":"Comic"}, {"chapter":"Comic"}]
     assert {i.code for i in validate_records(main, sup)} >= {"duplicate-line-id", "missing-line-id"}
-
-
-def test_review_comics_have_individual_boundaries(tmp_path):
-    path = tmp_path / "supplement.txt"
-    write_supplement_txt([
-        {"family":"Comic", "source_key":"Comic_a", "text":"甲片段", "context_status":"unlinked"},
-        {"family":"Comic", "source_key":"Comic_b", "text":"乙片段", "context_status":"unlinked"},
-    ], path)
-    text = path.read_text(encoding="utf-8")
-    assert "Comic_a" in text and "Comic_b" in text
-    assert text.index("Comic_a") < text.index("甲片段") < text.index("Comic_b") < text.index("乙片段")
-
-
-def test_review_integrity_checks_raw_text(tmp_path):
-    from scripts.check_corpus_integrity import check
-    output, audit = tmp_path / "out", tmp_path / "audit"
-    for directory in (output, audit):
-        directory.mkdir()
-        (directory / "story.jsonl").write_text(json.dumps({"source_key":"k", "line_id":"id", "text":"same", "raw_text":"same", "chronology_status":"unknown"}) + "\n")
-        (directory / "supplement.jsonl").write_text("")
-        (directory / "discarded.jsonl").write_text("")
-        (directory / "name_candidates.jsonl").write_text("")
-        (directory / "manifest.json").write_text(json.dumps({"language":"CHS", "files":{"table":{"sha256":"abc"}}, "accuracy_first": directory == audit}))
-    (output / "story.jsonl").write_text(json.dumps({"source_key":"k", "line_id":"id", "text":"same", "raw_text":"CORRUPTED", "chronology_status":"unknown"}))
-    with pytest.raises(ValueError, match="原文"):
-        check(output, audit)
-
 
 
 def test_review_provenance_verifies_actual_input_files(tmp_path):
@@ -124,17 +96,9 @@ def test_review_coverage_counts_only_retained_voiced_lines(tmp_path, monkeypatch
     stats = SpeakerStats()
     index = SpeakerIndex({key: SpeakerInfo(name, name, 1.0, "voice", True) for key, name in zip(text_map, ("铃", "哲"))}, stats)
     monkeypatch.setattr("zzz_story.extract.build_speaker_index", lambda **kwargs: (index, stats))
-    result = extract(out_dir=tmp_path / "out", data_dir=data, include_lore=False, include_supplement=False, formats="jsonl")
-    assert result.total_lines == 1
-    assert result.voice_linked == 1 and result.voice_speaker == 1
-
-
-@pytest.mark.parametrize("args", [{"formats":"jsnol"}, {"formats":""}, {"limit":0}, {"limit":-1}, {"require_speakers":float("nan")}, {"require_speakers":1.1}])
-def test_review_invalid_extract_args_fail_before_reading_data(tmp_path, args):
-    from zzz_story.extract import extract
-    with pytest.raises(ValueError):
-        extract(out_dir=tmp_path / "out", data_dir=tmp_path / "missing", **args)
-    assert not (tmp_path / "out").exists()
+    result = extract(out_dir=tmp_path / "out", data_dir=data, game_dir=tmp_path / "no-game")
+    assert result.total_lines == 2
+    assert result.voice_linked == 2 and result.voice_speaker == 2
 
 
 def test_review_partial_provenance_does_not_label_other_files(tmp_path):
@@ -144,25 +108,3 @@ def test_review_partial_provenance_does_not_label_other_files(tmp_path):
     provenance = {"commit":"a" * 40, "version":"3.2.0", "files":{"table.json":{"sha256":sha256_file(table)}}}
     (tmp_path / SOURCE_PROVENANCE).write_text(json.dumps(provenance))
     assert fetch_source_version(tmp_path, required_files=["table.json", "unverified.json"]) == "unknown"
-
-
-def test_integrity_includes_extra_records_and_requires_a_retained_peer(tmp_path):
-    from scripts.check_corpus_integrity import check
-    output, audit = tmp_path / "out", tmp_path / "audit"
-    main = {"source_key": "main", "line_id": "M", "text": "正文", "chronology_status": "unknown"}
-    extra = {"source_key": "extra", "line_id": "EX_extra", "text": "活动", "chronology_status": "unknown"}
-    for directory in (output, audit):
-        directory.mkdir()
-        for name, rows in (("story", [main]), ("extra", [extra]), ("discarded", []),
-                           ("extra-discarded", []), ("name_candidates", [])):
-            (directory / (name + ".jsonl")).write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
-        (directory / "manifest.json").write_text(json.dumps({"language": "CHS", "files": {"table": {"sha256": "abc"}},
-                                                           "accuracy_first": directory == audit, "include_extra": True}))
-    assert check(output, audit)["candidates"] == 2
-    (output / "extra.jsonl").write_text("")
-    with pytest.raises(ValueError, match="全部"):
-        check(output, audit)
-    removed = {"source_key": "extra", "text": "活动", "raw_text": "活动", "reason": "copy", "paired_source_key": "missing"}
-    (output / "extra-discarded.jsonl").write_text(json.dumps(removed), encoding="utf-8")
-    with pytest.raises(ValueError, match="配对来源无效"):
-        check(output, audit)

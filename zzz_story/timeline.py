@@ -148,6 +148,10 @@ def link_main_copies(clips: list[TimelineClip], text_map, perform: object) -> di
     absent from the timeline is linked to the used key, not treated as a new
     utterance. Distinct clips (including repeated NPC pauses) remain distinct.
     """
+    def same_subtitle(main_key: str, clip_key: str) -> bool:
+        # CleanedText equality includes both inline variants, independent of the export view.
+        return clean_text(text_map.get(main_key), "M") == clean_text(text_map.get(clip_key), "M")
+
     routes: dict[tuple[str, str], set[str]] = {}
     for row in perform.get("IAEFFFFLKNB", []) if isinstance(perform, dict) else []:
         for field, side in (("BCKKFAEFDPP", "M"), ("LGJCAHIEBBK", "F")):
@@ -176,8 +180,7 @@ def link_main_copies(clips: list[TimelineClip], text_map, perform: object) -> di
         for clip in group:
             by_number.setdefault(int(TEXT_RE.fullmatch(clip.text_key)[2]), []).append(clip)
         comparable = [(n, values[0]) for n, values in by_number.items() if n in numbered]
-        exact = sum(clean_text(text_map.get(numbered[n]), "M").text ==
-                    clean_text(text_map.get(clip.text_key), "M").text for n, clip in comparable)
+        exact = sum(same_subtitle(numbered[n], clip.text_key) for n, clip in comparable)
         # Allow a small number of independently updated/merged text values,
         # but never infer namespace identity from short or weak matches.
         if len(comparable) < 10 or exact / len(comparable) < 0.9:
@@ -195,8 +198,7 @@ def link_main_copies(clips: list[TimelineClip], text_map, perform: object) -> di
                            "avatar": next(iter(avatars)) if len(avatars) == 1 else None,
                            "voice_keys": sorted(voices), "sides": sorted(sides),
                            "timelines": sorted({clip.timeline for clip in values}),
-                           "text_difference": clean_text(text_map.get(key), "M").text !=
-                           clean_text(text_map.get(values[0].text_key), "M").text}
+                           "text_difference": not same_subtitle(key, values[0].text_key)}
         for n, key in sorted(numbered.items()):
             if n in by_number:
                 continue

@@ -5,7 +5,6 @@ from zzz_story.fetch import REQUIRED_FILES
 from zzz_story.narrative import annotate_content
 from zzz_story.speakers import SpeakerIndex, SpeakerInfo, SpeakerStats
 from zzz_story.validate import validate_records
-from zzz_story.writers import write_story_txt
 
 KEY = "Main_GalGame_Chapter240_124000034_001"
 TEXT = "过渡到蕾米埃尔回忆之前和艾尔妲在在零号空洞前的对话。"
@@ -31,11 +30,6 @@ def test_reviewed_outline_keeps_source_but_removes_actual_attribution(tmp_path):
     assert record["content_evidence"]["playback_status"] == "unverified"
     annotate_content([record])  # repeated review preserves the original name
     assert record["source_attribution"]["speaker"] == "安比"
-    path = tmp_path / "story.txt"
-    write_story_txt([record], path)
-    text = path.read_text(encoding="utf-8")
-    assert "剧情占位说明" in text and TEXT in text
-    assert "【安比】" not in text and "出场：安比" not in text
     assert not validate_records([record])
 
 
@@ -52,7 +46,7 @@ def test_placeholder_validation_catches_legacy_attribution():
     assert "placeholder-attribution" in {issue.code for issue in validate_records([bad])}
 
 
-def test_extraction_exports_same_placeholder_in_both_modes(tmp_path, monkeypatch):
+def test_extraction_preserves_placeholder_evidence(tmp_path, monkeypatch):
     data = tmp_path / "data"
     for rel in REQUIRED_FILES:
         path = data / rel
@@ -63,18 +57,12 @@ def test_extraction_exports_same_placeholder_in_both_modes(tmp_path, monkeypatch
     index = SpeakerIndex({KEY: SpeakerInfo("安比", "NameKey", .98, "perform", True,
                                          perform={"avatars": ["NameKey"], "voice_keys": ["voice"], "occurrences": []})}, stats)
     monkeypatch.setattr("zzz_story.extract.build_speaker_index", lambda **kwargs: (index, stats))
-    for accurate in (False, True):
-        out = tmp_path / str(accurate)
-        extract(out_dir=out, data_dir=data, include_lore=False, include_supplement=False,
-                formats="jsonl,txt,csv", accuracy_first=accurate)
-        records = [json.loads(line) for line in (out / "story.jsonl").read_text(encoding="utf-8").splitlines()]
-        assert len(records) == 1 and records[0]["speaker"] is None
-        assert records[0]["has_voice"] is True  # linkage remains evidence, not proof of an actual voice
-        assert records[0]["source_attribution"]["speaker"] == "安比"
-        assert records[0]["line_type"] == "placeholder"
-        assert json.loads((out / "placeholder-records.jsonl").read_text(encoding="utf-8")) == records[0]
-        manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
-        assert manifest["reviewed_placeholder_lines"] == 1
-        assert manifest["validation"]["errors"] == 0
-        from zzz_story.content_audit import export_errors
-        assert not export_errors(out, records, [])
+    out = tmp_path / "out"
+    extract(out_dir=out, data_dir=data, game_dir=tmp_path / "no-game")
+    record = json.loads((out / "story.jsonl").read_text(encoding="utf-8"))
+    assert record.get("speaker") is None and record["has_voice"]
+    assert record["source_attribution"]["speaker"] == "安比"
+    assert record["line_type"] == "placeholder"
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["reviewed_placeholder_lines"] == 1
+    assert manifest["validation"]["errors"] == 0

@@ -1,15 +1,8 @@
-import json
 import struct
 from types import SimpleNamespace
 
 import pytest
 
-from zzz_story.extract import (
-    _collapse_gender_pairs,
-    _filter_branch_lines,
-    _filter_perform_routes,
-    _write_csv,
-)
 from zzz_story.odin import (
     Entry,
     Node,
@@ -152,25 +145,6 @@ def test_shared_references_and_conflicting_assets_are_not_filtered():
     assert not merged["female"]["explicit_gender"]
 
 
-def test_filter_routes_keeps_npc_repeats_and_unpaired_candidates(tmp_path):
-    links = graph_links({"fixture": graph_from_raw(raw_fixture())}, {"fixture": {"M", "F"}})
-    records = [{"source_key": key, "chapter": "Chapter220", "scene": "1", "family": "GalGame",
-                "text": "same NPC line", "perform": link} for key, link in links.items()]
-    records += [{**records[0], "source_key": "pause", "perform": {}}]
-    kept, dropped = _filter_perform_routes(records)
-    assert dropped == 1 and {r["source_key"] for r in kept} == {"male", "shared", "pause"}
-    female = next(r for r in records if r["source_key"] == "female")
-    assert female["_discard_reason"] == "perform_gender_route"
-    assert female["_paired_source_key"] == "male"
-    assert _filter_perform_routes([female])[1] == 0
-    csv = tmp_path / "story.csv"
-    _write_csv([{**kept[0], "scene_speakers": [], "text_variants": None}], csv)
-    import csv as csv_module
-    with csv.open(encoding="utf-8-sig", newline="") as handle:
-        row = next(csv_module.DictReader(handle))
-    assert json.loads(row["perform"]) == kept[0]["perform"]
-
-
 def test_duplicate_only_omissions_require_near_complete_common_asset():
     prefix = "Main_GalGame_Chapter210_121000258"
     path = "fixture.asset"
@@ -188,16 +162,6 @@ def test_duplicate_only_omissions_require_near_complete_common_asset():
     tm._mapping[prefix + "_019"] = "line-16"
     link_unused_copies(links, {path: graph}, {path: {"M"}}, tm)
     assert prefix + "_017" not in links
-
-
-def test_heuristics_cannot_remove_verified_sister_npc_on_male_route():
-    base = {"chapter": "Chapter220", "scene": "1", "family": "GalGame", "sub_no": None}
-    rows = [{**base, "source_key": "wise", "line_no": 1, "speaker": "哲", "text": "same"},
-            {**base, "source_key": "belle", "line_no": 2, "speaker": "铃", "text": "same",
-             "perform": {"sides": ["M"], "explicit_gender": True}}]
-    assert _collapse_gender_pairs(rows, "M")[1] == 0
-    rows[0]["text"], rows[1]["text"] = "铃，你好", "哥哥，你好"
-    assert _filter_branch_lines(rows)[1] == 0
 
 
 def test_voice_alias_with_multi_part_line_suffix():

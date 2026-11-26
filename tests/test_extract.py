@@ -7,17 +7,12 @@ from zzz_story.extract import (
     _assign_line_ids,
     _assign_supplement_ids,
     _cache_root,
-    _collapse_gender_pairs,
-    _dedupe_records,
-    _filter_branch_lines,
     _galgame_scene_positions,
     _mark_unattributed_scenes,
     _normalize_speaker,
     _protagonist_side,
-    _record_raw_text,
     _scene_metadata,
     _speaker_identity,
-    _unknown_costume_forms,
     costume_prefixes,
     extract,
 )
@@ -88,15 +83,8 @@ def test_extract_fixture(tmp_path, monkeypatch):
 
     monkeypatch.setattr("zzz_story.extract.fetch_source_version", lambda *args, **kwargs: "3.2.0")
     out = tmp_path / "out"
-    stats = extract(
-        out_dir=out,
-        data_dir=data,
-        game_dir=tmp_path / "nogame",
-        no_speakers=True,
-        include_supplement=True,
-        formats="jsonl,txt",
-    )
-    assert stats.total_lines == 6
+    stats = extract(out_dir=out, data_dir=data, game_dir=tmp_path / "nogame")
+    assert stats.total_lines == 7
     assert stats.options_count == 2
     assert stats.supplement_lines == 6
 
@@ -104,38 +92,20 @@ def test_extract_fixture(tmp_path, monkeypatch):
         json.loads(line)
         for line in (out / "story.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert len(records) == 6
+    assert len(records) == 7
     galgame = [record for record in records if record["family"] == "GalGame"]
-    assert len(galgame) == 5
-    assert galgame[0]["scene_speakers"] == ["苏茜"]
-    assert galgame[0]["speaker"] is None
+    assert len(galgame) == 6
+    assert galgame[0]["scene_speakers"] == ["苏茜", "铃"]
+    assert galgame[0].get("speaker") is None
     assert galgame[0]["scene_act"] == 1
     assert galgame[0]["scene_title"] == "测试场景"
-    # 场景梗概（Intro_*）按默认的哲视角渲染；没有梗概的场景为 None。
-    assert galgame[0]["scene_intro"] == "哲和苏茜在测试场景见面。"
-    assert galgame[-1]["scene_intro"] is None
+    assert galgame[0]["scene_intro"] == "哲视角：哲和苏茜在测试场景见面。 / 铃视角：铃和苏茜在测试场景见面。"
+    assert galgame[-1].get("scene_intro") is None
     assert galgame[0]["quest_name"] == "测试任务"
     # The archive places scene 9000001 after 10000002 despite its smaller id.
     assert galgame[-1]["scene"] == "9000001"
     assert galgame[-1]["text"] == "后来场景台词"
     assert galgame[-1]["quest_name"] == "任务二"
-    story_txt = (out / "story.txt").read_text(encoding="utf-8")
-    assert "### 任务：测试任务" in story_txt
-    assert "### 任务：任务二" in story_txt
-    assert story_txt.index("你好") < story_txt.index("后来场景台词")
-    assert "## 第 1 幕：测试场景（出场：苏茜）" in story_txt
-    assert "> 梗概：哲和苏茜在测试场景见面。" in story_txt
-    assert "> 选项 1：选项分支一" in story_txt
-    assert "> 选项 2：选项分支二" in story_txt
-
-    assert (out / "supplement.jsonl").exists()
-    supp_txt = (out / "supplement.txt").read_text(encoding="utf-8")
-    assert "### 序章" in supp_txt
-    assert "#### 过场 01" in supp_txt
-    assert "过场台词一" in supp_txt
-    assert "妹妹，可以开始吗？" in supp_txt
-    assert "哥哥，可以开始吗？" in supp_txt  # No resource proves this is an alternate route.
-
     supplements = [
         json.loads(line)
         for line in (out / "supplement.jsonl").read_text(encoding="utf-8").splitlines()
@@ -158,91 +128,19 @@ def test_extract_fixture(tmp_path, monkeypatch):
     assert all(type(row["order"]) is int for row in chapters.values())
     assert chapters["Chapter110"]["supplement_lines"] == 1
     assert chapters["Chapter110"]["order"] > chapters["Chapter00"]["order"]
-    coverage = json.loads((out / "coverage.json").read_text(encoding="utf-8"))
-    assert coverage["total_lines"] == 6
-    assert coverage["options_count"] == 2
-    # Keyed by chapter token, not label: labels are not unique across chapters.
-    assert coverage["by_chapter"] == {"Chapter00": 5, "Chapter01": 1}
-    assert coverage["validation"]["errors"] == 0
-    # Plain fixture lines clean to themselves, so raw_text is omitted.
-    assert all(record["raw_text"] is None for record in records)
-    assert coverage["raw_text_omitted"] == 6
+    assert stats.by_chapter == {"Chapter00": 6, "Chapter01": 1}
+    assert all(record.get("raw_text") is None for record in records)
     assert manifest["ordering"]["chronology_status"] == "unknown"
     assert manifest["quality"]["unlinked_comic_lines"] == 1
     assert galgame[0]["order_source"] == "archive_table"
     assert galgame[0]["archive_order"] == 0
     assert galgame[0]["quest_id"] == 9901
-    discarded = [json.loads(line) for line in (out / "discarded.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert {row["source_key"] for row in discarded} == {
-        "Main_GalGame_Chapter00_10000002_002F", "Main_GalGame_Chapter00_10000002_Name_001F",
-    }
-    assert manifest["counts"]["discarded_lines"] == 1
-    assert manifest["counts"]["discarded_names"] == 1
-    assert all(row["raw_text"] and row["paired_source_key"] for row in discarded)
-    assert all(not any(key.startswith("_discard") or key == "_paired_source_key" for key in row) for row in records + supplements)
+    assert {row["text"] for row in supplements} >= {"哥哥，可以开始吗？", "妹妹，可以开始吗？"}
     # Stable ids: chapter token only, no chapter_order prefix.
     assert all(record["line_id"].startswith(("CH00_", "CH01_")) for record in records)
     # The manifest must not leak the local game path.
     assert "\\" not in manifest["game_dir"] and "/" not in manifest["game_dir"]
 
-    # --only-chapter keeps just the requested chapter; lore is skipped.
-    partial = tmp_path / "partial"
-    partial_stats = extract(
-        out_dir=partial,
-        data_dir=data,
-        game_dir=tmp_path / "nogame",
-        no_speakers=True,
-        include_supplement=True,
-        formats="jsonl,txt",
-        include_lore=False,
-        only_chapters={"01"},
-    )
-    assert partial_stats.total_lines == 1
-    partial_manifest = json.loads((partial / "manifest.json").read_text(encoding="utf-8"))
-    assert partial_manifest["chapter_filter"] == ["Chapter01"]
-    assert partial_manifest["chapters"][0]["token"] == "Chapter01"
-
-    # Accuracy-first mode keeps both branch candidates and raw source text so
-    # a reviewer can decide what belongs in a curated male-only corpus.
-    accurate = tmp_path / "accurate"
-    accurate_stats = extract(
-        out_dir=accurate,
-        data_dir=data,
-        game_dir=tmp_path / "nogame",
-        no_speakers=True,
-        include_supplement=True,
-        formats="jsonl",
-        include_lore=False,
-        accuracy_first=True,
-    )
-    assert accurate_stats.branch_filtered == 0
-    assert accurate_stats.gender_pair_filtered == 0
-    assert accurate_stats.deduped == 0
-    accurate_manifest = json.loads((accurate / "manifest.json").read_text(encoding="utf-8"))
-    assert accurate_manifest["accuracy_first"] is True
-    assert accurate_manifest["protagonist"] == "mixed"
-    assert (accurate / "discarded.jsonl").read_text(encoding="utf-8") == ""
-    accurate_records = [
-        json.loads(line)
-        for line in (accurate / "story.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
-    assert all(record["raw_text"] is not None for record in accurate_records)
-
-    limited = tmp_path / "limited"
-    extract(out_dir=limited, data_dir=data, game_dir=tmp_path / "nogame", no_speakers=True,
-            include_supplement=False, include_lore=False, formats="jsonl", limit=1)
-    assert (limited / "discarded.jsonl").read_text(encoding="utf-8") == ""
-
-    with pytest.raises(SystemExit):
-        extract(
-            out_dir=tmp_path / "empty",
-            data_dir=data,
-            game_dir=tmp_path / "nogame",
-            no_speakers=True,
-            include_supplement=False,
-            include_lore=False,
-            only_chapters={"999"},
-        )
 
 
 def test_cache_root_isolated_for_custom_dataset(tmp_path):
@@ -262,16 +160,6 @@ def test_supplement_ids_survive_insertion():
     assert [row["line_id"] for row in new[1:]] == [row["line_id"] for row in old]
 
 
-def test_filters_keep_reviewable_removal_evidence():
-    records = [_rec(1, "准备好了吗，铃？", "妮可"), _rec(2, "准备好了吗，哲？", "妮可")]
-    for i, row in enumerate(records):
-        row["source_key"] = f"key_{i}"
-    kept, count = _filter_branch_lines(records)
-    assert count == 1
-    removed = next(row for row in records if row not in kept)
-    assert removed["_discard_reason"] == "gender_address"
-    assert removed["_paired_source_key"] == "key_1"
-
 def _rec(line_no, text, speaker=None, scene="1", family="GalGame", line_type="dialogue"):
     return {
         "chapter": "Chapter110",
@@ -284,115 +172,6 @@ def _rec(line_no, text, speaker=None, scene="1", family="GalGame", line_type="di
         "text": text,
         "line_type": line_type,
     }
-
-
-def test_review_branch_filter_preserves_semantic_differences():
-    for records in (
-        [_rec(1, "师妹，我们不能打开这扇门。", "仪玄"), _rec(2, "师弟，我们能打开这扇门。", "仪玄")],
-        [_rec(1, "哥哥，今天不去空洞了。", "小孩"), _rec(2, "今天不去空洞了。", "邻居")],
-        [_rec(1, "铃，你会游泳吗？", "仪玄"), _rec(2, "哲，你会游泳吗？", "妮可")],
-    ):
-        kept, count = _filter_branch_lines(records)
-        assert count == 0
-        assert kept == records
-
-
-def test_review_gender_pairs_preserve_negation():
-    records = [_rec(1, "我们不能打开这扇门。", "铃"), _rec(2, "我们能打开这扇门。", "哲")]
-    assert _collapse_gender_pairs(records, "M") == (records, 0)
-
-
-def test_review_dedupe_preserves_props_and_real_repetition():
-    records = [_rec(1, "叮咚。", "门铃"), _rec(2, "叮咚。", None)]
-    assert _dedupe_records(records, "M") == (records, 0)
-    records = [_rec(1, "……", "仪玄"), _rec(2, "……", "仪玄")]
-    assert _dedupe_records(records, "M") == (records, 0)
-
-
-def test_dedupe_keeps_npc_repeats():
-    records = [
-        _rec(1, "……", "叶瞬光"),
-        _rec(2, "怎么了？", "铃"),
-        _rec(3, "没事。", "仪玄"),
-        _rec(4, "……", "叶瞬光"),
-    ]
-    kept, dropped = _dedupe_records(records, "F")
-    assert dropped == 0
-    assert len(kept) == 4
-
-
-def test_dedupe_drops_protagonist_copies():
-    records = [
-        _rec(1, "出发吧。", "铃"),
-        _rec(2, "出发吧。", "哲"),
-        _rec(3, "好的。", None),
-        _rec(4, "好的。", "学生铃"),
-    ]
-    kept, dropped = _dedupe_records(records, "F")
-    assert dropped == 1
-    assert [(r["line_no"], r["speaker"]) for r in kept] == [(1, "铃"), (3, None), (4, "学生铃")]
-
-
-def test_dedupe_drops_copied_branch_block():
-    records = [
-        _rec(1, "你来了。", "仪玄"),
-        _rec(2, "先坐下吧。", "仪玄"),
-        _rec(3, "好。", "铃"),
-        _rec(4, "你来了。", "仪玄"),
-        _rec(5, "先坐下吧。", "仪玄"),
-        _rec(6, "好。", "哲"),
-    ]
-    kept, dropped = _dedupe_records(records, "F")
-    assert dropped == 1
-    assert [r["line_no"] for r in kept] == [1, 2, 3, 4, 5]
-
-
-def test_branch_filter_needs_counterpart():
-    records = [
-        _rec(1, "师妹，快来这边！", "橘福福"),
-        _rec(2, "师弟，快来这边！", "橘福福"),
-        _rec(20, "引壶师弟，掩护师父！", "橘福福"),
-    ]
-    kept, dropped = _filter_branch_lines(records)
-    assert dropped == 1
-    assert [r["line_no"] for r in kept] == [2, 20]
-
-
-def test_branch_filter_sibling_pairs():
-    records = [
-        _rec(1, "铃，我查过了，Fairy 确实筛出了有效的委托。", "哲"),
-        _rec(2, "哥哥…我查了一下，Fairy 确实筛出了一些委托。", None),
-        _rec(3, "铃，你顺便去了解下情况吧。", None),
-        _rec(4, "哥哥，你顺便去了解下情况吧。", None),
-        _rec(5, "哥哥，吃饭了。", "铃"),
-    ]
-    kept, dropped = _filter_branch_lines(records)
-    # Rephrased and unattributed lines cannot establish a branch pair.
-    assert [r["line_no"] for r in kept] == [1, 2, 3, 4, 5]
-
-
-def test_branch_filter_scoped_to_scene():
-    # Two scenes: the pair lives in scene 2 while scene 1 lines sit at the
-    # same group-local positions; only the paired Belle line may drop.
-    records = [
-        _rec(1, "今天拉面店不营业吗？", None, scene="0001"),
-        _rec(2, "稍等，我还没说完！", "苏茜", scene="0001"),
-        _rec(1, "师妹，快来这边！", "橘福福", scene="0002"),
-        _rec(2, "师弟，快来这边！", "橘福福", scene="0002"),
-    ]
-    kept, dropped = _filter_branch_lines(records)
-    assert dropped == 1
-    assert [r["text"] for r in kept] == ["今天拉面店不营业吗？", "稍等，我还没说完！", "师弟，快来这边！"]
-
-
-def test_branch_filter_bare_name_vocative():
-    records = [
-        _rec(1, "铃，你会游泳吗？", "仪玄"),
-        _rec(2, "哲，你会游泳吗？", "仪玄"),
-    ]
-    kept, dropped = _filter_branch_lines(records)
-    assert dropped == 1
-    assert kept[0]["text"] == "哲，你会游泳吗？"
 
 
 def test_normalize_speaker():
@@ -490,37 +269,6 @@ def test_protagonist_side_covers_costumes_but_not_props():
     assert _protagonist_side(None) is None
 
 
-def test_gender_pair_collapses_costume_forms():
-    records = [
-        _rec(1, "我记起来了，船长也说过这件事。", "道士铃"),
-        _rec(2, "我记起来了，船长也说过这件事。", "道士哲"),
-    ]
-    kept, dropped = _collapse_gender_pairs(records, "M")
-    assert dropped == 1
-    assert [record["speaker"] for record in kept] == ["道士哲"]
-
-
-def test_gender_pair_collapses_sutando_forms():
-    # 佩洛伊斯铃 is the game's own "stand-in Belle" form, not a prop.
-    records = [
-        _rec(1, "……", "佩洛伊斯铃"),
-        _rec(2, "……", "佩洛伊斯哲"),
-    ]
-    kept, dropped = _collapse_gender_pairs(records, "M")
-    assert dropped == 1
-    assert [record["speaker"] for record in kept] == ["佩洛伊斯哲"]
-
-
-def test_gender_pair_keeps_distinct_sibling_lines():
-    records = [
-        _rec(1, "哥哥，我先去工坊了。", "学生铃"),
-        _rec(2, "师父让我们在观里等消息。", "学生哲"),
-    ]
-    kept, dropped = _collapse_gender_pairs(records, "M")
-    assert dropped == 0
-    assert len(kept) == 2
-
-
 def test_costume_prefixes_come_from_the_textmap():
     text_map = {
         "GalNPCBelle": "铃",
@@ -541,35 +289,6 @@ def test_protagonist_side_accepts_a_new_costume_form():
     assert _protagonist_side("幼年铃", frozenset({"幼年"})) == "F"
     # Without the derived set the form stays unknown.
     assert _protagonist_side("幼年哲") is None
-
-
-def test_unknown_costume_forms_only_reports_pairs():
-    records = [
-        {"speaker": "幼年哲"},
-        {"speaker": "幼年铃"},
-        {"speaker": "门铃"},
-        {"speaker": "哲"},
-    ]
-    assert _unknown_costume_forms(records, DEFAULT_COSTUME_PREFIXES) == {
-        "幼年哲": 1,
-        "幼年铃": 1,
-    }
-
-
-def test_gender_pair_collapses_with_a_derived_costume_set():
-    records = [
-        _rec(1, "走吧，师父在等我们。", "幼年铃"),
-        _rec(2, "走吧，师父在等我们。", "幼年哲"),
-    ]
-    kept, dropped = _collapse_gender_pairs(records, "M", frozenset({"幼年"}))
-    assert dropped == 1
-    assert [record["speaker"] for record in kept] == ["幼年哲"]
-
-
-def test_raw_text_is_kept_only_when_cleaning_changed_it():
-    assert _record_raw_text("你好", "你好", keep_raw=False) is None
-    assert _record_raw_text("<b>你好</b>", "你好", keep_raw=False) == "<b>你好</b>"
-    assert _record_raw_text("你好", "你好", keep_raw=True) == "你好"
 
 
 def test_line_id_does_not_depend_on_chapter_order():
@@ -605,48 +324,13 @@ def test_review_reused_output_is_rejected_before_any_writes(tmp_path):
     out = tmp_path / "out"
     out.mkdir()
     (out / "supplement.jsonl").write_text("old", encoding="utf-8")
-    with pytest.raises(FileExistsError, match="已有提取产物"):
-        extract(out_dir=out, data_dir=tmp_path / "missing", no_speakers=True, include_supplement=False)
+    with pytest.raises(FileExistsError, match="工作目录须为空"):
+        extract(out_dir=out, data_dir=tmp_path / "missing")
     assert (out / "supplement.jsonl").read_text(encoding="utf-8") == "old"
     assert not (out / "manifest.json").exists()
 
 
-def test_common_route_sibling_dialogue_and_options_are_preserved():
-    common = [_rec(1, "出发吧。", "铃"), _rec(2, "出发吧。", "哲")]
-    common[0]["perform"] = {"sides": ["F", "M"], "occurrences": [{"node": 1}]}
-    assert _collapse_gender_pairs(common, "M")[1] == 0
-    assert _dedupe_records(common, "M")[1] == 0
-    choice = [_rec(1, "出发吧。", "铃", line_type="option"), _rec(2, "出发吧。", "哲")]
-    assert _collapse_gender_pairs(choice, "M")[1] == 0
-    assert _dedupe_records(choice, "M")[1] == 0
-
-
-def test_dedupe_uses_recent_match_after_earlier_unrelated_repeat():
-    rows = [_rec(1, "出发吧。", "NPC"), *[_rec(n, str(n)) for n in range(2, 8)],
-            _rec(8, "出发吧。", "铃"), _rec(9, "出发吧。", "哲")]
-    kept, dropped = _dedupe_records(rows, "M")
-    assert dropped == 1
-    assert [r["line_no"] for r in kept if r["text"] == "出发吧。"] == [1, 9]
-
-
-def test_scene_alias_inference_does_not_zip_cast_order_or_leak_between_scenes():
-    from zzz_story.extract import _infer_alias_names
-    from zzz_story.speakers import SpeakerIndex, SpeakerInfo, SpeakerStats
-    pending = [{"_source_key": k, "_chapter": "Chapter01", "_scene": scene, "_family": "Chat"}
-               for k, scene in (("a", "1"), ("b", "1"), ("c", "2"), ("d", "3"))]
-    speakers = SpeakerIndex({k: SpeakerInfo(None, alias, 0, "voice", True)
-                             for k, alias in (("a", "x"), ("b", "y"), ("c", "x"), ("d", "x"))}, SpeakerStats())
-    mapping = _infer_alias_names(pending, speakers, {("Chat:Chapter01", "1"): ["甲", "乙"],
-                                                   ("Chat:Chapter01", "2"): ["丙"], ("Chat:Chapter01", "3"): ["丁"]})
-    assert mapping == {("Chapter01", "2", "Chat", "x"): "丙", ("Chapter01", "3", "Chat", "x"): "丁"}
-
-
-def test_address_pairs_do_not_remove_distant_repetitions():
-    rows = [_rec(1, "师妹，快来这边！", "橘福福"), _rec(15, "师弟，快来这边！", "橘福福")]
-    assert _filter_branch_lines(rows)[1] == 0
-
-
-def test_empty_female_source_and_limited_unselected_peer_are_not_discarded(tmp_path):
+def test_empty_variant_keeps_nonempty_peer_regardless_of_input_order(tmp_path):
     data = tmp_path / "data"
     prefix = "Main_GalGame_Chapter00_10000002_"
     # JSON insertion order deliberately visits the female key before its peer.
@@ -655,21 +339,6 @@ def test_empty_female_source_and_limited_unselected_peer_are_not_discarded(tmp_p
     for rel in REQUIRED_FILES:
         _write(data / rel, tm if rel == "TextMap/TextMapTemplateTb.json" else {})
     full = tmp_path / "full"
-    extract(out_dir=full, data_dir=data, game_dir=tmp_path / "no-game", no_speakers=True,
-            include_lore=False, include_extra=False, formats="jsonl")
-    removed = [json.loads(line) for line in (full / "discarded.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert [row["source_key"] for row in removed] == [prefix + "01F"]
-    limited = tmp_path / "limited"
-    extract(out_dir=limited, data_dir=data, game_dir=tmp_path / "no-game", no_speakers=True,
-            include_lore=False, formats="jsonl", limit=1)
-    assert (limited / "discarded.jsonl").read_text(encoding="utf-8") == ""
-    row = json.loads((limited / "story.jsonl").read_text(encoding="utf-8"))
-    assert row["source_key"] == prefix + "01F" and row["text"] == "女主独立文本"
-
-
-def test_scene_alias_inference_does_not_borrow_other_family_names():
-    from zzz_story.extract import _infer_alias_names
-    from zzz_story.speakers import SpeakerIndex, SpeakerInfo, SpeakerStats
-    pending = [{"_source_key": "k", "_chapter": "Chapter01", "_scene": "1", "_family": "Chat"}]
-    index = SpeakerIndex({"k": SpeakerInfo(None, "npc", 0, "voice", True)}, SpeakerStats())
-    assert _infer_alias_names(pending, index, {("Bubble:Chapter01", "1"): ["路人"]}) == {}
+    extract(out_dir=full, data_dir=data, game_dir=tmp_path / "no-game")
+    rows = [json.loads(line) for line in (full / "story.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert {row["source_key"]: row["text"] for row in rows} == {key: text for key, text in tm.items() if text}

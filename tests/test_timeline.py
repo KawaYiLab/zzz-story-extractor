@@ -1,11 +1,10 @@
-import csv
 import json
 import struct
 from types import SimpleNamespace
 
 import pytest
 
-from zzz_story.extract import _filter_timeline_copies, _write_csv, extract
+from zzz_story.extract import extract
 from zzz_story.fetch import REQUIRED_FILES
 from zzz_story.speakers import SpeakerIndex, SpeakerInfo, SpeakerStats
 from zzz_story.textmap import TextMap
@@ -92,20 +91,8 @@ def test_numbered_copies_are_backed_by_routes_not_speaker_or_text_guessing():
     text_map._mapping[prefix + "078"] = text_map._mapping["TL_C30_ChatPlus_03_78"] = "my brother"
     text_map._mapping[prefix + "079"] = text_map._mapping["TL_C30_ChatPlus_03_79"] = "my sister"
     links = link_main_copies(clips, text_map, perform)
-    records = [{"source_key": prefix + f"{n:03}", "chapter": "Chapter210", "scene": "1721000030",
-                "family": "GalGame", "line_no": n, "text": text_map.get(prefix + f"{n:03}"),
-                "speaker": None, "timeline": links[prefix + f"{n:03}"]} for n in range(1, 84)]
-    # Unlinked identical NPC pauses are real candidates, not generic duplicates.
-    records += [{**records[0], "source_key": "pause-a", "timeline": {}, "text": "..."},
-                {**records[0], "source_key": "pause-b", "timeline": {}, "text": "..."}]
-    kept, dropped = _filter_timeline_copies(records)
-    keys = {row["source_key"] for row in kept}
-    assert prefix + "078" not in keys and prefix + "079" in keys
-    assert prefix + "037" in keys
-    assert {"pause-a", "pause-b"} <= keys
-    assert dropped == 41
-    assert all(row.get("_discard_reason") in {"timeline_gender_route", "timeline_unused_copy"}
-               for row in records if row["source_key"] not in keys)
+    assert links[prefix + "078"]["sides"] == ["F"]
+    assert links[prefix + "079"]["sides"] == ["M"]
 
 
 def test_namespace_alignment_and_config_routes_are_required():
@@ -117,13 +104,11 @@ def test_namespace_alignment_and_config_routes_are_required():
     assert not link_main_copies(clips, text_map, perform)
 
 
-def test_csv_preserves_timeline_metadata(tmp_path):
-    path = tmp_path / "story.csv"
-    metadata = {"text_key": "TL_fixture_01", "sides": ["M"], "voice_keys": ["voice"]}
-    _write_csv([{"text_variants": None, "scene_speakers": [], "timeline": metadata}], path)
-    with path.open(encoding="utf-8-sig", newline="") as handle:
-        row = next(csv.DictReader(handle))
-    assert json.loads(row["timeline"]) == metadata
+def test_timeline_alignment_checks_belles_inline_wording():
+    prefix, text_map, clips, perform = timeline_fixture()
+    text_map._mapping[prefix + "078"] = "{M#一样}{F#女主新字幕}"
+    text_map._mapping["TL_C30_ChatPlus_03_78"] = "{M#一样}{F#女主旧字幕}"
+    assert link_main_copies(clips, text_map, perform)[prefix + "078"]["text_difference"]
 
 
 def test_asset_paths_use_configured_prefabs_only():
@@ -133,7 +118,7 @@ def test_asset_paths_use_configured_prefabs_only():
     assert timeline_asset_paths(perform, [cab]) == {path[len("Assets/NapResources/"):]}
 
 
-def test_extract_timeline_routes_with_full_audit_and_csv(tmp_path, monkeypatch):
+def test_extract_preserves_both_routes_and_timeline_evidence(tmp_path, monkeypatch):
     prefix, text_map, clips, perform = timeline_fixture()
     links = link_main_copies(clips, text_map, perform)
     data = tmp_path / "data"
@@ -145,22 +130,9 @@ def test_extract_timeline_routes_with_full_audit_and_csv(tmp_path, monkeypatch):
     infos = {key: SpeakerInfo("NPC", None, 0.95, "timeline", True, link) for key, link in links.items()}
     monkeypatch.setattr("zzz_story.extract.build_speaker_index",
                         lambda **kwargs: (SpeakerIndex(infos, SpeakerStats()), SpeakerStats()))
-    outputs = []
-    for accurate in (False, True):
-        out = tmp_path / ("audit" if accurate else "default")
-        extract(out_dir=out, data_dir=data, game_dir=tmp_path / "nogame", formats="jsonl,txt,csv",
-                include_lore=False, include_supplement=False, accuracy_first=accurate)
-        outputs.append(out)
-    def read(path):
-        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-    kept = read(outputs[0] / "story.jsonl")
-    candidates = read(outputs[1] / "story.jsonl")
-    discarded = read(outputs[0] / "discarded.jsonl")
-    assert len(kept) == 42 and len(candidates) == 83 and len(discarded) == 41
-    originals = {row["source_key"]: row for row in candidates}
-    assert all(row["line_id"] == originals[row["source_key"]]["line_id"] for row in kept)
-    assert {row["source_key"] for row in kept + discarded} == set(originals)
-    assert all(row["timeline"] for row in kept + discarded)
-    assert all(row["raw_text"] == originals[row["source_key"]]["raw_text"] for row in discarded)
-    assert not read(outputs[1] / "discarded.jsonl")
+    out = tmp_path / "out"
+    extract(out_dir=out, data_dir=data, game_dir=tmp_path / "nogame")
+    rows = [json.loads(line) for line in (out / "story.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 83
+    assert {row["source_key"]: row["timeline"] for row in rows} == links
+    assert len({row["line_id"] for row in rows}) == 83

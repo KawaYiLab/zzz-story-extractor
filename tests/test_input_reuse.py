@@ -77,7 +77,7 @@ def test_extract_reuses_loaded_inputs_and_extra_candidates(tmp_path, monkeypatch
     monkeypatch.setattr(extraction, "extra_candidate_keys", candidates)
     monkeypatch.setattr(extras, "candidate_keys", unexpected_candidates)
     out = tmp_path / "out"
-    stats = extraction.extract(out_dir=out, data_dir=data, game_dir=tmp_path / "game", formats="jsonl")
+    stats = extraction.extract(out_dir=out, data_dir=data, game_dir=tmp_path / "game")
 
     assert stats.total_lines == 1
     assert languages == ["EN"]

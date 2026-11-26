@@ -72,7 +72,7 @@ def test_extract_extras_labels_groups_with_event_names():
         "Activity_Chat_Unknown_30160094_01": "没有标题",
         "Side_Chat_Chapter03_226023006_01": "支线",
     }, "CHS")
-    records, _, stats = extract_extras(text_map)
+    records, stats = extract_extras(text_map)
     labels = {row["chapter"]: (row["chapter_label"], row.get("group_name_source")) for row in records}
     assert labels == {
         "activity.HotPot": ("活动剧情 · 滚烫寻鲜记", "title"),

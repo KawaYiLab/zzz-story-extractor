@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from .clean import clean_text
+from .dedupe import display_side
 from .lore_machine import selected_variant
 from .narrative import annotate_attribution, annotate_local_order
 from .writers import _record_line, write_jsonl
@@ -43,11 +44,10 @@ def street_source(key: str) -> tuple[str, str, int, str | None] | None:
 
 
 def extract_street(text_map, directory: Path, *, speaker_index=None,
-                   accuracy_first: bool = False, protagonist: str = "M") -> dict[str, int]:
+                   protagonist: str = "M") -> dict[str, int]:
     """Retain short lines, both source variants, and repeated distinct keys.
 
-    Scene name tables are candidates, never per-line speaker bindings. Only
-    mutually verified resource gender peers can move into removal audit.
+    Scene name tables are candidates, never per-line speaker bindings. Both sides of a resource-backed branch remain available.
     """
     directory.mkdir(parents=True, exist_ok=True)
     names = defaultdict(list)
@@ -70,9 +70,9 @@ def extract_street(text_map, directory: Path, *, speaker_index=None,
         if parsed is None:
             continue
         family, scene, line_no, variant = parsed
-        requested = variant or protagonist
-        cleaned = clean_text(raw, requested)
         info = speaker_index.lookup(key) if speaker_index else None
+        requested = display_side(info, variant, protagonist)
+        cleaned = clean_text(raw, requested)
         speaker = clean_text(info.speaker, requested).text if info and info.speaker else None
         is_option = speaker in {"选项", "玩家选项"} or bool(speaker_index and speaker_index.is_option(key))
         if speaker in _NON_SPEAKERS:
@@ -95,17 +95,6 @@ def extract_street(text_map, directory: Path, *, speaker_index=None,
         rows.append(row)
     annotate_attribution(rows)
     annotate_local_order(rows)
-    by_key = {row["source_key"]: row for row in rows}
-    if not accuracy_first:
-        for row in rows:
-            link = row.get("perform") or {}
-            peer = by_key.get(link.get("paired_key"))
-            peer_link = (peer or {}).get("perform") or {}
-            if (row["retained"] and link.get("explicit_gender") and link.get("sides") == ["F"]
-                    and peer and peer["retained"] and peer_link.get("explicit_gender")
-                    and peer_link.get("sides") == ["M"] and peer_link.get("paired_key") == row["source_key"]
-                    and (peer["family"], peer["scene"]) == (row["family"], row["scene"])):
-                row.update(retained=False, reason="perform_gender_route", paired_source_key=peer["source_key"])
     rows.sort(key=lambda r: (r["family"], r["scene"], r.get("_local_order", (r["line_no"],)), r["source_key"]))
     if machine := getattr(text_map, "machine", None):
         for row in rows:
